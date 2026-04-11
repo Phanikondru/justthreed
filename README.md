@@ -35,45 +35,35 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 
 ---
 
-## 🤖 Supported AI Models
+## 📸 Screenshots & demos
 
-Works with any MCP-compatible AI client:
-
-- **Claude Desktop** (Anthropic)
-- **Cursor** / **VSCode** with MCP extension
-- **Gemini CLI** (Google)
-- **ChatGPT** with MCP support
-- **Ollama** — run Llama 3, Mistral, Qwen, DeepSeek locally for **100% free, offline use**
-- **OpenRouter** — access free models like Gemini Flash, DeepSeek R1
-
-> 💡 **Want zero cost forever?** Use Ollama with a local model. No API key, no internet, no limits.
+> 🚧 **Screenshots and demo videos coming in the next release.**
+>
+> We're putting together a set of before/after shots and short screen recordings showing real prompts turning into finished renders — product shots, interiors, low-poly scenes, and a full hero-render walkthrough. They'll drop into this section as they land.
+>
+> **Built something cool with JustThreed?** Share it on X / LinkedIn and tag [@Phanikondru](https://x.com/Phanikondru) — we'll feature community renders here with credit.
 
 ---
 
-## ⚡ Features
+## 🏗️ How It Works
 
-- **Natural language 3D modeling** — create, modify, and delete objects by describing them
-- **Material & texture control** — apply colors, materials, and textures via prompts
-- **Scene management** — control lighting, cameras, and environment
-- **Asset library integration** — pull assets from Poly Haven directly
-- **Python code execution** — run arbitrary Blender Python scripts via AI
-- **Two-way communication** — AI can read your current scene before making changes
-- **Built-in chat panel** — prompt directly from Blender's sidebar (no app switching)
-- **Project memory** — remembers your asset preferences and scene style
-- **Batch operations** — "create 20 random rock variations with different materials"
+```
+AI Client (Claude / Gemini / Cursor / Ollama / etc.)
+       ↓
+JustThreed MCP Server (server.py) — translates intent to commands
+       ↓
+Blender Addon (addon.py) — socket server on port 9876
+       ↓
+Blender (bpy API) — executes in real time
+```
 
----
-
-## 📋 Requirements
-
-- Blender 4.5.0 or newer (tested on 4.5.0 — should work on any later version)
-- Python 3.11 or newer (bundled with Blender 4.5+)
-- `uv` package manager
-- One of the supported AI clients listed above
+The Blender addon opens a TCP socket and waits for commands. The MCP server sits between your AI client and Blender, exposing tools that any AI model can call. When you type a prompt, the AI decides which tools to use and in what order, and Blender executes them instantly.
 
 ---
 
-## 🛠️ Installation
+## 🛠️ Local setup
+
+> This is the current install path. Once JustThreed is published to the Blender Extensions platform, a one-click install will be available — see [Blender Extension — coming soon](#-blender-extension--coming-soon) below.
 
 ### Step 1 — Install uv
 
@@ -87,21 +77,21 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Step 2 — Install the Blender Addon
+### Step 2 — Install the Blender addon
 
 1. Download `addon.py` from this repository
 2. Open Blender → **Edit** → **Preferences** → **Add-ons**
 3. Click **Install from Disk** and select `addon.py`
 4. Enable the addon by ticking the checkbox next to **Interface: JustThreed**
 
-### Step 3 — Start the MCP Server in Blender
+### Step 3 — Start the MCP server in Blender
 
 1. Press **N** in the 3D viewport to open the side panel
 2. Find the **JustThreed** tab
 3. Click **Start MCP Server**
 4. You should see: `JustThreed MCP Server started on port 9876`
 
-### Step 4 — Connect Your AI Client
+### Step 4 — Connect your AI client
 
 Pick your preferred AI client below:
 
@@ -125,6 +115,31 @@ Restart Claude Desktop. You will see a hammer icon confirming the connection.
 </details>
 
 <details>
+<summary><b>Claude Code (CLI)</b></summary>
+
+The fastest way — in any terminal run:
+
+```bash
+claude mcp add justthreed uvx justthreed
+```
+
+Or, to scope it to a single project, create `.mcp.json` in the project root:
+
+```json
+{
+  "mcpServers": {
+    "justthreed": {
+      "command": "uvx",
+      "args": ["justthreed"]
+    }
+  }
+}
+```
+
+Launch `claude` and run `/mcp` to confirm `justthreed` is listed as connected. Claude Code chains tool calls aggressively, so you can usually build an entire scene in a single prompt — see the [Limitations](#%EF%B8%8F-limitations) section for details.
+</details>
+
+<details>
 <summary><b>Cursor / VSCode</b></summary>
 
 Open your MCP settings file and add:
@@ -139,6 +154,8 @@ Open your MCP settings file and add:
   }
 }
 ```
+
+In Cursor, also raise **Settings → Features → Chat → Max tool calls per request** to 50–100 so it doesn't stop mid-build.
 </details>
 
 <details>
@@ -203,25 +220,142 @@ Open your MCP settings file and add:
 
 ---
 
-## ⚠️ Important — Tool-call limits and how to work around them
+## 📦 Blender Extension — coming soon
 
-> **Read this before your first complex scene.** It is the single biggest source of "why did it stop halfway?" confusion for new users, and it applies to **every** AI client, not just JustThreed.
+> 🚧 **One-click install directly from Blender is on the way.**
+>
+> JustThreed has not yet been submitted to the [Blender Extensions platform](https://extensions.blender.org/). For now, the install path is the "Local setup" steps above — download `addon.py`, install from disk, and start the MCP server from the sidebar.
+>
+> When the extension is published, you'll be able to:
+>
+> - Install it in two clicks from **Edit → Preferences → Get Extensions**
+> - Get auto-updates with every new release — no more re-downloading `addon.py`
+> - Skip the `uv` install step entirely on most setups
+>
+> This section will be updated with the extension link and the new install flow the day it goes live. ⭐ Star the repo to get notified via the GitHub Releases feed.
 
-### The thing nobody tells you
+---
+
+## 💡 What you can do
+
+### Features
+
+- **Natural language 3D modeling** — create, modify, and delete objects by describing them
+- **Material & texture control** — apply colors, materials, and textures via prompts
+- **Scene management** — control lighting, cameras, and environment
+- **Asset library integration** — pull assets from Poly Haven directly
+- **Python code execution** — run arbitrary Blender Python scripts via AI
+- **Two-way communication** — AI can read your current scene before making changes
+- **Built-in chat panel** — prompt directly from Blender's sidebar (no app switching)
+- **Project memory** — remembers your asset preferences and scene style
+- **Batch operations** — "create 20 random rock variations with different materials"
+
+### Example prompts
+
+**Basic modeling**
+```
+Create a simple house with a red roof
+Add windows to the front of the house
+Make the walls white with a rough plaster texture
+```
+
+**Scene building**
+```
+Set up a forest scene with 20 trees of varying heights
+Add golden hour lighting from the left
+Place a stone path leading to the house
+```
+
+**Asset integration**
+```
+Search Poly Haven for a grass texture and apply it to the ground
+Download a rock model from Poly Haven and scatter 15 copies randomly
+```
+
+**Advanced**
+```
+Look at the current scene and create a Three.js version of it
+Create 5 variations of this chair with different wood materials
+Render the scene at 1920x1080 and save it to my desktop
+```
+
+### Supported AI clients
+
+Works with any MCP-compatible AI client:
+
+- **Claude Desktop** (Anthropic)
+- **Claude Code (CLI)** — the most agentic option, chains the whole build in one prompt
+- **Cursor** / **VSCode** with MCP extension
+- **Gemini CLI** (Google)
+- **ChatGPT** with MCP support
+- **Ollama** — run Llama 3, Mistral, Qwen, DeepSeek locally for **100% free, offline use**
+- **OpenRouter** — access free models like Gemini Flash, DeepSeek R1
+
+> 💡 **Want zero cost forever?** Use Ollama with a local model. No API key, no internet, no limits.
+
+### Available MCP tools
+
+| Tool | Description |
+|---|---|
+| `create_object` | Create mesh objects (cube, sphere, cylinder, plane, etc.) |
+| `modify_object` | Move, rotate, scale, rename objects |
+| `delete_object` | Remove objects from the scene |
+| `set_material` | Apply colors and materials |
+| `apply_texture` | Load and apply image textures |
+| `get_scene_info` | Read current scene state |
+| `set_lighting` | Add and configure lights |
+| `set_camera` | Position and configure camera |
+| `search_polyhaven` | Search Poly Haven asset library |
+| `import_asset` | Import downloaded assets |
+| `execute_code` | Run arbitrary Python in Blender |
+| `render_scene` | Trigger a render |
+| `save_blend_file` | Save the current scene to a `.blend` file |
+| `open_blend_file` | Load a `.blend` file (great for resuming work in a new chat) |
+
+---
+
+## ⚠️ Limitations
+
+### Tool-call limits per AI client — read this before your first complex scene
+
+> It is the single biggest source of "why did it stop halfway?" confusion for new users, and it applies to **every** AI client, not just JustThreed.
 
 Every AI client that speaks MCP has a practical limit on **how many tools it can call inside a single conversational turn** before it pauses and checks in with you. This is not a JustThreed limit — it is part of each client's tool-use policy. It matters because a finished product render often needs **15 to 40 tool calls** (scene info, primitives, modifiers, materials, shader nodes, lighting, camera, render settings, compositor, render_and_show, …).
 
 **What you will see per client:**
 
-| Client | Typical behavior |
+| Client | Type | Typical per-turn tool-call budget | Default behavior |
+|---|---|---|---|
+| **Claude Desktop** | Chat app | ~10–25 tool calls, then pauses | Fires a batch, summarizes progress, asks "should I continue?". The hardest per-turn cap of any client — feels the most "stuck" on big scenes. |
+| **Claude Code (CLI)** | Terminal agent | ~100+ tool calls per turn, effectively context-bound | Chains aggressively until the task is done or the context window fills. Rarely pauses mid-build. The most hands-off option for long scenes. |
+| **Gemini CLI** | Terminal agent | 1 tool call, then pauses | Runs the **first** tool and stops, waiting for confirmation. This is a policy default, not a hard limit. Use `/yolo` mode or the "proceed" instruction above to unlock full chaining. |
+| **Cursor** | IDE | ~25 tool calls per request (configurable) | Setting: `Cursor Settings → Features → Chat → Max tool calls per request`. Raise it to 50–100 for JustThreed. |
+| **VSCode + Copilot Chat / Continue** | IDE | Varies | Some chain freely, some pause per tool. Check your extension's agent-mode settings. |
+| **Ollama / local MCP clients** | Local | No remote limit | Only bounded by your local model's context window. Smaller local models (7B–13B) often forget mid-plan and need smaller prompts regardless. |
+
+#### CLI vs desktop — the short version
+
+**CLI clients have way more headroom than desktop chat apps.** Claude Code in the terminal and Gemini CLI (once `/yolo` is on) will happily fire 50–100+ JustThreed tools in a single turn without asking — more than enough for a fully-lit, fully-materialed hero render in one prompt. Claude Desktop, by contrast, almost always pauses before you get there.
+
+**But "CLI = no limits" is not quite true.** Even CLI agents eventually hit:
+
+- **Context window limits** — every tool call and its result consume tokens. On a 200K context, you get roughly 80–150 JustThreed tool calls before the model starts forgetting earlier steps.
+- **Per-turn iteration caps** — Claude Code has an internal cap (configurable) on how many tools it will run before yielding back to the user. It's high, but not infinite.
+- **Rate limits on the provider side** — Anthropic and Google both throttle extremely long agentic runs on heavy usage.
+
+**Practical rule of thumb for JustThreed:**
+
+| If you use... | You can safely prompt... |
 |---|---|
-| **Claude Desktop / Claude Code** | Fires a batch of tools (often around 10–30), then pauses, summarizes progress, and asks if you want to continue. Per-turn iteration limits apply regardless of the Claude model or plan tier. |
-| **Gemini CLI** | Runs the **first** tool and stops, waiting for your confirmation by default. See the [Gemini CLI section above](#justthreed) for the three fixes (`proceed` instruction, `/yolo` mode, or batched prompts). |
-| **Cursor / VSCode / others** | Varies by model and IDE configuration. Some chain freely, some pause after each tool. |
+| Claude Code CLI | A full product render in one prompt (materials + lights + camera + render). |
+| Gemini CLI with `/yolo` | Same — full scene in one prompt. |
+| Claude Desktop | 2–3 stages per prompt. Use the "continue" pattern below when it pauses. |
+| Cursor / VSCode | 2–3 stages per prompt unless you raise the max-tool-calls setting. |
+| Ollama (local) | 1 stage per prompt. Local models lose focus faster than cloud models. |
 
-**None of this blocks you from building anything** — it just means you work in **checkpoints** instead of one giant prompt. The good news: JustThreed was designed for this. Three patterns below.
+**None of this blocks you from building anything** — it just means you work in **checkpoints** instead of one giant prompt. Three patterns below.
 
-### Pattern 1 — "Just keep going"
+#### Pattern 1 — "Just keep going"
 
 When the AI pauses mid-build, reply with one line:
 
@@ -233,7 +367,7 @@ remaining steps.
 
 `get_scene_info` returns the **complete** scene state (every object, every material, every modifier, every collection), so the AI can pick up exactly where it stopped without guessing or repeating work. This pattern alone handles 90% of tool-limit pauses.
 
-### Pattern 2 — "Save and resume in a new chat"
+#### Pattern 2 — "Save and resume in a new chat"
 
 For very long builds (40+ tool calls) or when you want to stop for the night and come back tomorrow, use `.blend` files as checkpoints. JustThreed's `save_blend_file` + `open_blend_file` pair is built for this — and because the extension registers a persistent load-post handler, **the MCP server survives file reloads**, so you can chain this indefinitely.
 
@@ -252,7 +386,7 @@ three-point lighting and render.
 
 No tool-limit budget is wasted on re-creating anything — the new chat starts from the saved scene state.
 
-### Pattern 3 — "Break the prompt into stages" (the reliable default)
+#### Pattern 3 — "Break the prompt into stages" (the reliable default)
 
 The most predictable way to build anything complex is to break the work into **3–5 stages**, one prompt per stage, each ending with a `render_and_show`. This avoids hitting any limits at all and **also gives you better results**, because seeing a mid-state render lets you catch mistakes early instead of after 40 tool calls of compounding errors.
 
@@ -265,46 +399,30 @@ The most predictable way to build anything complex is to break the work into **3
 
 This is how professional Blender artists actually work anyway — lighting the scene before the materials are done is a waste of time. JustThreed just formalizes the rhythm.
 
-### The one-line takeaway
+#### The one-line takeaway
 
 > **If the AI pauses mid-build, say *"continue — call get_scene_info first"*. If you are starting a big scene, break it into 3–5 stages and end each one with `render_and_show`. If you want to pick up tomorrow, `save_blend_file` tonight and `open_blend_file` tomorrow.**
 
-With these three patterns, there is effectively no scene JustThreed can't build, regardless of which client you're using or what tool-call limit it enforces per turn.
+### Other known limitations
+
+- **Complex artistic judgment** (composition, style) still requires human input — the AI can execute, but it can't replace taste.
+- **Very large scenes** may require breaking prompts into smaller steps (see the three patterns above).
+- **`execute_code` runs arbitrary Python** — always save your work before using it.
+- **Local models (Ollama)** are less capable than cloud models for complex tasks. Expect to hand-hold smaller models more than Claude / Gemini.
+- **Not yet published** on the Blender Extensions platform — for now you install `addon.py` manually. See the "coming soon" section above.
 
 ---
 
-## 💬 Example Prompts
+## 📋 Requirements
 
-### Basic modeling
-```
-Create a simple house with a red roof
-Add windows to the front of the house
-Make the walls white with a rough plaster texture
-```
-
-### Scene building
-```
-Set up a forest scene with 20 trees of varying heights
-Add golden hour lighting from the left
-Place a stone path leading to the house
-```
-
-### Asset integration
-```
-Search Poly Haven for a grass texture and apply it to the ground
-Download a rock model from Poly Haven and scatter 15 copies randomly
-```
-
-### Advanced
-```
-Look at the current scene and create a Three.js version of it
-Create 5 variations of this chair with different wood materials
-Render the scene at 1920x1080 and save it to my desktop
-```
+- Blender 4.5.0 or newer (tested on 4.5.0 — should work on any later version)
+- Python 3.11 or newer (bundled with Blender 4.5+)
+- `uv` package manager
+- One of the supported AI clients listed above
 
 ---
 
-## 🗂️ Project Structure
+## 🗂️ Project structure
 
 ```
 justthreed/
@@ -324,50 +442,6 @@ justthreed/
 
 ---
 
-## 🏗️ How It Works
-
-```
-AI Client (Claude / Cursor / Ollama / etc.)
-       ↓
-JustThreed MCP Server (server.py) — translates intent to commands
-       ↓
-Blender Addon (addon.py) — socket server on port 9876
-       ↓
-Blender (bpy API) — executes in real time
-```
-
-The Blender addon opens a TCP socket and waits for commands. The MCP server sits between your AI client and Blender, exposing tools that any AI model can call. When you type a prompt, the AI decides which tools to use and in what order, and Blender executes them instantly.
-
----
-
-## 🔧 Available MCP Tools
-
-| Tool | Description |
-|---|---|
-| `create_object` | Create mesh objects (cube, sphere, cylinder, plane, etc.) |
-| `modify_object` | Move, rotate, scale, rename objects |
-| `delete_object` | Remove objects from the scene |
-| `set_material` | Apply colors and materials |
-| `apply_texture` | Load and apply image textures |
-| `get_scene_info` | Read current scene state |
-| `set_lighting` | Add and configure lights |
-| `set_camera` | Position and configure camera |
-| `search_polyhaven` | Search Poly Haven asset library |
-| `import_asset` | Import downloaded assets |
-| `execute_code` | Run arbitrary Python in Blender |
-| `render_scene` | Trigger a render |
-
----
-
-## ⚠️ Known Limitations
-
-- Complex artistic judgment (composition, style) still requires human input
-- Very large scenes may require breaking prompts into smaller steps
-- `execute_code` runs arbitrary Python — always save your work before using it
-- Local models (Ollama) are less capable than cloud models for complex tasks
-
----
-
 ## 🤝 Contributing
 
 Contributions are very welcome! Here is how to get started:
@@ -384,11 +458,22 @@ Contributions are very welcome! Here is how to get started:
 - Documentation and video tutorials
 - Testing on different OS and Blender versions
 
+### Roadmap
+- [ ] Single addon install — no separate MCP server process
+- [ ] Publish to the Blender Extensions platform (one-click install)
+- [ ] Built-in model selector UI inside Blender
+- [ ] Chat history panel in Blender sidebar
+- [ ] Deeper Poly Haven integration
+- [ ] Animation and rigging support
+- [ ] Sketchfab asset integration
+- [ ] Batch rendering workflows
+- [ ] Export pipeline — FBX, GLTF for Unity and Unreal Engine
+
 ---
 
-## 💰 Cost
+## 💝 Support this project
 
-**Free. Completely free.**
+JustThreed is **free and open source forever** — the core tools will always be MIT-licensed and nothing is gated behind a paywall.
 
 | What | Cost |
 |---|---|
@@ -401,19 +486,13 @@ Contributions are very welcome! Here is how to get started:
 
 You only pay if you personally choose a premium AI provider. JustThreed itself will always be free.
 
----
+If it saves you time or helps you ship a project, please consider supporting continued development. Every bit of support goes directly into more tools, more AI-client integrations, cross-platform testing, and keeping the project moving.
 
-## 🗺️ Roadmap
-
-- [ ] Single addon install — no separate MCP server process
-- [ ] Built-in model selector UI inside Blender
-- [ ] Chat history panel in Blender sidebar
-- [ ] Project memory — remembers your assets and preferences
-- [ ] Poly Haven deep integration
-- [ ] Animation and rigging support
-- [ ] Sketchfab asset integration
-- [ ] Batch rendering workflows
-- [ ] Export pipeline — FBX, GLTF for Unity and Unreal Engine
+- 💖 **[Sponsor on GitHub](https://github.com/sponsors/Phanikondru)** — the `Sponsor` button at the top of this repository
+- ⭐ **Star this repository** — it costs nothing, takes one click, and helps other artists find JustThreed
+- 📣 **Share a render you made with JustThreed** on Twitter / X / LinkedIn and tag [@Phanikondru](https://x.com/Phanikondru) — social proof is the single most valuable thing you can give a new open-source project
+- 🐛 **File bug reports and feature requests** — a good issue is worth more than a donation
+- 💼 **Studio or agency pipeline?** — if you want JustThreed integrated into a production pipeline, or custom tools built on top of it, reach out via LinkedIn below
 
 ---
 
@@ -430,20 +509,6 @@ MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE) for 
 - [ahujasid](https://github.com/ahujasid/blender-mcp) for the original BlenderMCP that inspired this project
 - [Poly Haven](https://polyhaven.com/) for the free asset library
 - [Ollama](https://ollama.com/) for making local AI models accessible to everyone
-
----
-
-## 💝 Support this project
-
-JustThreed is **free and open source forever** — the core 104 tools will always be MIT-licensed and nothing is gated behind a paywall.
-
-If it saves you time or helps you ship a project, please consider supporting continued development. Every bit of support goes directly into more tools, more AI-client integrations, cross-platform testing, and keeping the project moving.
-
-- 💖 **[Sponsor on GitHub](https://github.com/sponsors/Phanikondru)** — the `Sponsor` button at the top of this repository
-- ⭐ **Star this repository** — it costs nothing, takes one click, and helps other artists find JustThreed
-- 📣 **Share a render you made with JustThreed** on Twitter / X / LinkedIn and tag [@Phanikondru](https://x.com/Phanikondru) — social proof is the single most valuable thing you can give a new open-source project
-- 🐛 **File bug reports and feature requests** — a good issue is worth more than a donation
-- 💼 **Studio or agency pipeline?** — if you want JustThreed integrated into a production pipeline, or custom tools built on top of it, reach out via LinkedIn below
 
 ---
 
