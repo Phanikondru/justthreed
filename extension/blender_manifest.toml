@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "justthreed"
+version = "0.2.0"
+name = "JustThreed"
+tagline = "Control Blender with natural language via MCP"
+maintainer = "Phanindhra Kondru"
+type = "add-on"
+
+tags = ["3D View", "Development"]
+
+blender_version_min = "4.5.0"
+
+license = [
+  "SPDX:MIT",
+]
+
+[permissions]
+network = "Listen on localhost:9876 for MCP client connections"
