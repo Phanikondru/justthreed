@@ -203,6 +203,76 @@ Open your MCP settings file and add:
 
 ---
 
+## ⚠️ Important — Tool-call limits and how to work around them
+
+> **Read this before your first complex scene.** It is the single biggest source of "why did it stop halfway?" confusion for new users, and it applies to **every** AI client, not just JustThreed.
+
+### The thing nobody tells you
+
+Every AI client that speaks MCP has a practical limit on **how many tools it can call inside a single conversational turn** before it pauses and checks in with you. This is not a JustThreed limit — it is part of each client's tool-use policy. It matters because a finished product render often needs **15 to 40 tool calls** (scene info, primitives, modifiers, materials, shader nodes, lighting, camera, render settings, compositor, render_and_show, …).
+
+**What you will see per client:**
+
+| Client | Typical behavior |
+|---|---|
+| **Claude Desktop / Claude Code** | Fires a batch of tools (often around 10–30), then pauses, summarizes progress, and asks if you want to continue. Per-turn iteration limits apply regardless of the Claude model or plan tier. |
+| **Gemini CLI** | Runs the **first** tool and stops, waiting for your confirmation by default. See the [Gemini CLI section above](#justthreed) for the three fixes (`proceed` instruction, `/yolo` mode, or batched prompts). |
+| **Cursor / VSCode / others** | Varies by model and IDE configuration. Some chain freely, some pause after each tool. |
+
+**None of this blocks you from building anything** — it just means you work in **checkpoints** instead of one giant prompt. The good news: JustThreed was designed for this. Three patterns below.
+
+### Pattern 1 — "Just keep going"
+
+When the AI pauses mid-build, reply with one line:
+
+```
+Continue from where you left off. Call get_scene_info first so you
+know exactly what is already in the scene, then keep going with the
+remaining steps.
+```
+
+`get_scene_info` returns the **complete** scene state (every object, every material, every modifier, every collection), so the AI can pick up exactly where it stopped without guessing or repeating work. This pattern alone handles 90% of tool-limit pauses.
+
+### Pattern 2 — "Save and resume in a new chat"
+
+For very long builds (40+ tool calls) or when you want to stop for the night and come back tomorrow, use `.blend` files as checkpoints. JustThreed's `save_blend_file` + `open_blend_file` pair is built for this — and because the extension registers a persistent load-post handler, **the MCP server survives file reloads**, so you can chain this indefinitely.
+
+**Chat 1 — build the base, then save:**
+```
+Build the bronze spirits bottle described above. When you're done, call
+save_blend_file with path "~/Desktop/bottle.blend".
+```
+
+**Chat 2 — fresh conversation, resume where you left off:**
+```
+Call open_blend_file with path "~/Desktop/bottle.blend", then
+get_scene_info so you can see what's already built. Then add the
+three-point lighting and render.
+```
+
+No tool-limit budget is wasted on re-creating anything — the new chat starts from the saved scene state.
+
+### Pattern 3 — "Break the prompt into stages" (the reliable default)
+
+The most predictable way to build anything complex is to break the work into **3–5 stages**, one prompt per stage, each ending with a `render_and_show`. This avoids hitting any limits at all and **also gives you better results**, because seeing a mid-state render lets you catch mistakes early instead of after 40 tool calls of compounding errors.
+
+**Typical staging for a hero product render:**
+
+1. **Shape** — primitives + edit-mode modeling + modifiers → `render_and_show`
+2. **Materials** — shader node graph, PBR, textures → `render_and_show`
+3. **Lighting + camera** — studio preset, DoF, f-stop → `render_and_show`
+4. **Render + post** — engine, samples, color management, compositor → final `render_and_show`
+
+This is how professional Blender artists actually work anyway — lighting the scene before the materials are done is a waste of time. JustThreed just formalizes the rhythm.
+
+### The one-line takeaway
+
+> **If the AI pauses mid-build, say *"continue — call get_scene_info first"*. If you are starting a big scene, break it into 3–5 stages and end each one with `render_and_show`. If you want to pick up tomorrow, `save_blend_file` tonight and `open_blend_file` tomorrow.**
+
+With these three patterns, there is effectively no scene JustThreed can't build, regardless of which client you're using or what tool-call limit it enforces per turn.
+
+---
+
 ## 💬 Example Prompts
 
 ### Basic modeling
