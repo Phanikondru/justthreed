@@ -496,8 +496,6 @@ Contributions are very welcome! Here is how to get started:
 
 JustThreed is **free and open source forever** — the core tools will always be MIT-licensed and nothing is gated behind a paywall.
 
-> **Using JustThreed in a studio or agency pipeline?** If you need it integrated into a production stack, custom tools built on top of it, or artist training, get in touch via [LinkedIn](https://www.linkedin.com/in/phanindhra-kondru-436220205/). Paid engagements directly fund continued open-source development — one production integration typically funds a full quarter of new features for everyone.
-
 | What | Cost |
 |---|---|
 | JustThreed addon | ✅ Free |
