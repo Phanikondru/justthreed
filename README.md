@@ -363,9 +363,21 @@ MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE) for 
 
 ---
 
-## ⭐ Support
+## 💝 Support this project
 
-If JustThreed helps you, please give it a star on GitHub — it helps others discover it and motivates continued development.
+JustThreed is **free and open source forever** — the core 104 tools will always be MIT-licensed and nothing is gated behind a paywall.
+
+If it saves you time or helps you ship a project, please consider supporting continued development. Every bit of support goes directly into more tools, more AI-client integrations, cross-platform testing, and keeping the project moving.
+
+- 💖 **[Sponsor on GitHub](https://github.com/sponsors/Phanikondru)** — the `Sponsor` button at the top of this repository
+- ⭐ **Star this repository** — it costs nothing, takes one click, and helps other artists find JustThreed
+- 📣 **Share a render you made with JustThreed** on Twitter / X / LinkedIn and tag [@Phanikondru](https://x.com/Phanikondru) — social proof is the single most valuable thing you can give a new open-source project
+- 🐛 **File bug reports and feature requests** — a good issue is worth more than a donation
+- 💼 **Studio or agency pipeline?** — if you want JustThreed integrated into a production pipeline, or custom tools built on top of it, reach out via LinkedIn below
+
+---
+
+## ⭐ Community
 
 Found a bug? Open an issue. Have an idea? Start a discussion. Want to contribute? Open a PR.
 
