@@ -58,6 +58,159 @@ def main() -> int:
         check("get_scene_info", send({"tool": "get_scene_info"}))
         check("get_object", send({"tool": "get_object", "name": "TestSphere"}))
 
+        # Phase 6 — transforms
+        check("move_object", send({
+            "tool": "move_object", "name": "TestSphere", "delta": [0.0, 1.5, 0.0],
+        }))
+        check("rotate_object", send({
+            "tool": "rotate_object", "name": "TestSphere", "axis": "Z", "radians": 0.7854,
+        }))
+        check("scale_object", send({
+            "tool": "scale_object", "name": "TestSphere", "factor": 1.5,
+        }))
+        check("set_transform", send({
+            "tool": "set_transform",
+            "name": "TestSphere",
+            "location": [2.0, 0.0, 1.0],
+        }))
+        check("set_origin", send({
+            "tool": "set_origin", "name": "TestSphere", "to": "GEOMETRY",
+        }))
+
+        # Phase 6 — modifiers
+        check("add_modifier(SUBSURF)", send({
+            "tool": "add_modifier",
+            "name": "TestSphere",
+            "type": "SUBSURF",
+            "params": {"levels": 2, "render_levels": 3},
+        }))
+        check("add_modifier(BEVEL)", send({
+            "tool": "add_modifier",
+            "name": "TestSphere",
+            "type": "BEVEL",
+            "params": {"width": 0.05, "segments": 4},
+        }))
+        check("set_modifier_param", send({
+            "tool": "set_modifier_param",
+            "name": "TestSphere",
+            "modifier_name": "Subsurf",
+            "params": {"levels": 3},
+        }))
+        check("reorder_modifier", send({
+            "tool": "reorder_modifier",
+            "name": "TestSphere",
+            "modifier_name": "Bevel",
+            "index": 0,
+        }))
+        check("get_object(stack)", send({"tool": "get_object", "name": "TestSphere"}))
+        check("remove_modifier", send({
+            "tool": "remove_modifier",
+            "name": "TestSphere",
+            "modifier_name": "Bevel",
+        }))
+
+        # Phase 7 — materials + shader node graph
+        check("create_material", send({
+            "tool": "create_material",
+            "name": "TestRed",
+            "base_color": [0.8, 0.05, 0.05],
+            "roughness": 0.3,
+            "metallic": 0.0,
+        }))
+        check("create_glass_material", send({
+            "tool": "create_glass_material",
+            "name": "TestGlass",
+            "color": [0.9, 0.95, 1.0],
+            "ior": 1.45,
+            "roughness": 0.0,
+            "transmission": 1.0,
+        }))
+        check("assign_material", send({
+            "tool": "assign_material",
+            "object_name": "TestSphere",
+            "material_name": "TestRed",
+            "slot_index": 0,
+        }))
+        check("list_materials", send({"tool": "list_materials"}))
+        check("duplicate_material", send({
+            "tool": "duplicate_material",
+            "name": "TestRed",
+            "new_name": "TestRed_Copy",
+        }))
+        check("add_shader_node", send({
+            "tool": "add_shader_node",
+            "material_name": "TestRed",
+            "node_type": "TEX_NOISE",
+            "location": [-400.0, 0.0],
+            "name": "Noise1",
+        }))
+        check("set_shader_node_param", send({
+            "tool": "set_shader_node_param",
+            "material_name": "TestRed",
+            "node": "Noise1",
+            "params": {"Scale": 12.0, "Detail": 3.0},
+        }))
+        check("connect_shader_nodes", send({
+            "tool": "connect_shader_nodes",
+            "material_name": "TestRed",
+            "from_node": "Noise1",
+            "from_socket": "Fac",
+            "to_node": "Principled BSDF",
+            "to_socket": "Roughness",
+        }))
+        check("disconnect_shader_nodes", send({
+            "tool": "disconnect_shader_nodes",
+            "material_name": "TestRed",
+            "from_node": "Noise1",
+            "from_socket": "Fac",
+            "to_node": "Principled BSDF",
+            "to_socket": "Roughness",
+        }))
+
+        # Phase 8 — lights + cameras
+        check("add_light", send({
+            "tool": "add_light",
+            "type": "AREA",
+            "name": "TestAreaLight",
+            "location": [3.0, -3.0, 4.0],
+            "energy": 400.0,
+            "color": [1.0, 0.95, 0.9],
+        }))
+        check("set_light_properties", send({
+            "tool": "set_light_properties",
+            "name": "TestAreaLight",
+            "energy": 500.0,
+            "size": 2.0,
+            "temperature_kelvin": 5600,
+        }))
+        check("add_camera", send({
+            "tool": "add_camera",
+            "name": "TestCamera",
+            "location": [6.0, -6.0, 4.0],
+            "target": "TestSphere",
+            "lens_mm": 85.0,
+        }))
+        check("set_active_camera", send({"tool": "set_active_camera", "name": "TestCamera"}))
+        check("set_camera_properties", send({
+            "tool": "set_camera_properties",
+            "name": "TestCamera",
+            "lens_mm": 100.0,
+            "dof_distance": 8.0,
+            "fstop": 2.8,
+        }))
+        check("setup_three_point", send({
+            "tool": "setup_three_point_lighting",
+            "subject_name": "TestSphere",
+            "distance": 4.0,
+            "energy": 600.0,
+        }))
+        check("setup_product_studio", send({
+            "tool": "setup_product_studio",
+            "subject_name": "TestSphere",
+            "style": "SOFTBOX",
+            "distance": 3.5,
+        }))
+
         check("render_and_show", send(
             {"tool": "render_and_show", "resolution": 256},
             timeout=300.0,

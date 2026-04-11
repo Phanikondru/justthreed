@@ -142,6 +142,47 @@ Open your MCP settings file and add:
 </details>
 
 <details>
+<summary><b>Gemini CLI</b></summary>
+
+1. Install Gemini CLI:
+   ```bash
+   npm install -g @google/gemini-cli
+   ```
+2. Edit `~/.gemini/settings.json` and add the `mcpServers` block (merge it with whatever is already in the file — don't overwrite the existing keys):
+   ```json
+   {
+     "mcpServers": {
+       "justthreed": {
+         "command": "uvx",
+         "args": ["justthreed"],
+         "timeout": 60000
+       }
+     }
+   }
+   ```
+3. Launch `gemini` in a fresh terminal.
+4. Inside the CLI, run `/mcp` — you should see `justthreed` listed as `CONNECTED` with all of JustThreed's tools.
+
+> ⚠️ **Important — Gemini chains tool calls differently than Claude. Read this before your first prompt.**
+>
+> If you paste a multi-step prompt like *"create a cube, add a material, add a light, add a camera, and render"*, **Gemini will run the first tool and then stop**, waiting for you to confirm before calling the next one. This is not a bug and not a JustThreed problem — it is how Gemini CLI's tool-use policy works by default. Claude Desktop, by contrast, chains the whole plan in a single turn, which is why the same prompt feels "instant" in Claude and "stuck" in Gemini.
+>
+> You have three ways to fix it — pick whichever fits your workflow:
+>
+> **1. Tell Gemini to keep going.** Reply with a single sentence like:
+> ```
+> Proceed with the remaining steps without pausing for confirmation.
+> If any step fails, report the error and continue with the next one.
+> ```
+>
+> **2. Turn on YOLO mode (auto-approve every tool call).** Inside the CLI type `/yolo`, or launch with `gemini --yolo`. Safe for JustThreed because every operation is undoable in Blender with `Ctrl+Z` and the MCP server is local-only — just remember to turn it off when you're using other MCP servers that touch the internet.
+>
+> **3. Send smaller batched prompts.** Instead of one 13-step mega-prompt, break it into 3–4 checkpoints (shape → materials → lighting → render). This plays to Gemini's natural one-step-at-a-time rhythm and gives you an inspection point after each stage.
+>
+> **The tools themselves behave identically under both Claude and Gemini** — the only difference is how many of them the client is willing to fire before checking in with you. Once you know the three fixes above, Gemini works end-to-end with every scenario JustThreed supports.
+</details>
+
+<details>
 <summary><b>Ollama (free, local, offline)</b></summary>
 
 1. Install Ollama from [ollama.com](https://ollama.com)
