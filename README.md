@@ -114,6 +114,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### Step 4 — Connect your AI client
 
+> ⚠️ **Heads-up about the install command used below.** Every example in this section uses `uvx justthreed`, which fetches the MCP server from PyPI. **PyPI publish is not done yet** — until it lands, use the local-source form instead: clone this repo and have the AI client launch JustThreed via `uv run --directory /absolute/path/to/justthreed/mcp_server justthreed`. Concretely:
+>
+> - In a JSON `mcpServers` block, set `"command": "uv"` and `"args": ["run", "--directory", "/abs/path/to/mcp_server", "justthreed"]` instead of the `uvx justthreed` pair shown below.
+> - For CLI install commands (Claude Code, Gemini), replace `uvx justthreed` with `uv run --directory /abs/path/to/mcp_server justthreed`.
+>
+> Once PyPI publish lands, the shorter `uvx justthreed` form in every example below will work as-is with zero config changes on your side. This note will be removed the day it ships.
+
 Pick your preferred AI client below:
 
 <details>
