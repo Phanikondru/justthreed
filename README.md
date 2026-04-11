@@ -5,7 +5,8 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Blender](https://img.shields.io/badge/Blender-4.5%2B-orange)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![Stars](https://img.shields.io/github/stars/yourusername/justthreed?style=social)
+[![Sponsor](https://img.shields.io/github/sponsors/Phanikondru?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/Phanikondru)
+[![Stars](https://img.shields.io/github/stars/Phanikondru/justthreed?style=social)](https://github.com/Phanikondru/justthreed)
 
 ---
 
