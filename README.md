@@ -138,13 +138,15 @@ Restart Claude Desktop. You will see a hammer icon confirming the connection.
 <details>
 <summary><b>Claude Code (CLI)</b></summary>
 
-The fastest way — in any terminal run:
+> **Before you run these commands:** Blender must be open, the JustThreed addon enabled, and the MCP socket server started from the sidebar (Step 3 above). Claude Code talks to JustThreed, which talks to Blender via a local socket — if Blender's socket isn't listening on port 9876 you'll see connection errors no matter how the client is configured.
+
+**1. Register JustThreed as a user-scoped MCP server** (available in every project, not just one):
 
 ```bash
-claude mcp add justthreed uvx justthreed
+claude mcp add --scope user justthreed -- uvx justthreed
 ```
 
-Or, to scope it to a single project, create `.mcp.json` in the project root:
+Alternatively, to scope it to a single project, create `.mcp.json` in the project root:
 
 ```json
 {
@@ -157,7 +159,17 @@ Or, to scope it to a single project, create `.mcp.json` in the project root:
 }
 ```
 
-Launch `claude` and run `/mcp` to confirm `justthreed` is listed as connected. Claude Code chains tool calls aggressively, so you can usually build an entire scene in a single prompt — see the [Limitations](#limitations) section for details.
+**2. Verify registration** (in any terminal, no `claude` session needed):
+
+```bash
+claude mcp list
+```
+
+You should see a line like `justthreed: uvx justthreed - ✓ Connected`. If it says `✗ Failed` or `Needs authentication`, go back and start the socket server inside Blender.
+
+**3. Restart any running Claude Code session.** ⚠️ This is the step most people miss — **MCP servers are loaded once at session startup**, so if you already had `claude` running when you ran `mcp add`, the new server is registered but not active in that session. Exit with `/exit` and relaunch. Inside the fresh session, run `/mcp` to see the JustThreed tools listed.
+
+Claude Code chains tool calls aggressively, so you can usually build an entire scene in a single prompt — see the [Limitations](#limitations) section for details.
 </details>
 
 <details>
@@ -181,6 +193,8 @@ In Cursor, also raise **Settings → Features → Chat → Max tool calls per re
 
 <details>
 <summary><b>Gemini CLI</b></summary>
+
+> **Before you start:** Blender must be open with the JustThreed addon enabled and the MCP socket server started from the sidebar (Step 3 above). If port 9876 isn't listening inside Blender, Gemini CLI will connect to JustThreed but every tool call will fail with a socket error.
 
 1. Install Gemini CLI:
    ```bash
