@@ -1,16 +1,36 @@
-# 🎨 JustThreed
+<div align="center">
 
-> Control Blender with natural language — works with Claude, Gemini, ChatGPT, Cursor, VSCode, and local models via Ollama. One addon. Zero config. Fully free and open source.
+<!-- TODO: replace with a real logo (recommend 160–240px square). Drop the file at .github/assets/logo.png and uncomment. -->
+<!-- <img src=".github/assets/logo.png" alt="JustThreed" width="180" /> -->
 
-![License](https://img.shields.io/badge/license-MIT-green)
-![Blender](https://img.shields.io/badge/Blender-4.5%2B-orange)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-[![Sponsor](https://img.shields.io/github/sponsors/Phanikondru?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/Phanikondru)
-[![Stars](https://img.shields.io/github/stars/Phanikondru/justthreed?style=social)](https://github.com/Phanikondru/justthreed)
+<h1>JustThreed</h1>
+
+<p><i>Control Blender with natural language.<br/>Works with Claude, Gemini, ChatGPT, Cursor, VSCode, and local models via Ollama.<br/>One addon. Zero config. Fully free and open source.</i></p>
+
+<p>
+  <a href="https://github.com/Phanikondru/justthreed/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License" /></a>
+  <img src="https://img.shields.io/badge/Blender-4.5%2B-orange?style=flat-square" alt="Blender 4.5+" />
+  <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square" alt="Python 3.11+" />
+  <a href="https://github.com/sponsors/Phanikondru"><img src="https://img.shields.io/github/sponsors/Phanikondru?label=Sponsor&logo=GitHub&color=ea4aaa&style=flat-square" alt="Sponsor" /></a>
+  <a href="https://github.com/Phanikondru/justthreed/stargazers"><img src="https://img.shields.io/github/stars/Phanikondru/justthreed?style=flat-square&color=yellow" alt="Stars" /></a>
+</p>
+
+<p>
+  <a href="#local-setup"><b>Get started</b></a> ·
+  <a href="#what-you-can-do"><b>What you can do</b></a> ·
+  <a href="#limitations"><b>Limitations</b></a> ·
+  <a href="https://github.com/sponsors/Phanikondru"><b>Sponsor</b></a> ·
+  <a href="https://x.com/Phanikondru"><b>@Phanikondru</b></a>
+</p>
+
+<!-- TODO: drop a hero screenshot or short demo gif here once available. -->
+<!-- <img src=".github/assets/hero.gif" alt="JustThreed demo" width="760" /> -->
+
+</div>
 
 ---
 
-## ✨ What is JustThreed?
+## What is JustThreed?
 
 JustThreed connects Blender to any AI model through the Model Context Protocol (MCP). Just describe what you want in plain English and watch it appear in Blender — no scripting, no manual clicking, no prior Blender experience needed.
 
@@ -23,7 +43,7 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 
 ---
 
-## 🚀 What Makes JustThreed Different
+## What makes JustThreed different
 
 | Feature | JustThreed | Existing tools |
 |---|---|---|
@@ -36,7 +56,7 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 
 ---
 
-## 📸 Screenshots & demos
+## Screenshots & demos
 
 > 🚧 **Screenshots and demo videos coming in the next release.**
 >
@@ -46,7 +66,7 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 
 ---
 
-## 🏗️ How It Works
+## How it works
 
 ```
 AI Client (Claude / Gemini / Cursor / Ollama / etc.)
@@ -62,9 +82,9 @@ The Blender addon opens a TCP socket and waits for commands. The MCP server sits
 
 ---
 
-## 🛠️ Local setup
+## Local setup
 
-> This is the current install path. Once JustThreed is published to the Blender Extensions platform, a one-click install will be available — see [Blender Extension — coming soon](#-blender-extension--coming-soon) below.
+> This is the current install path. Once JustThreed is published to the Blender Extensions platform, a one-click install will be available — see [Blender Extension — coming soon](#blender-extension--coming-soon) below.
 
 ### Step 1 — Install uv
 
@@ -137,7 +157,7 @@ Or, to scope it to a single project, create `.mcp.json` in the project root:
 }
 ```
 
-Launch `claude` and run `/mcp` to confirm `justthreed` is listed as connected. Claude Code chains tool calls aggressively, so you can usually build an entire scene in a single prompt — see the [Limitations](#%EF%B8%8F-limitations) section for details.
+Launch `claude` and run `/mcp` to confirm `justthreed` is listed as connected. Claude Code chains tool calls aggressively, so you can usually build an entire scene in a single prompt — see the [Limitations](#limitations) section for details.
 </details>
 
 <details>
@@ -221,7 +241,7 @@ In Cursor, also raise **Settings → Features → Chat → Max tool calls per re
 
 ---
 
-## 📦 Blender Extension — coming soon
+## Blender extension — coming soon
 
 > 🚧 **One-click install directly from Blender is on the way.**
 >
@@ -237,7 +257,7 @@ In Cursor, also raise **Settings → Features → Chat → Max tool calls per re
 
 ---
 
-## 💡 What you can do
+## What you can do
 
 ### Features
 
@@ -315,7 +335,7 @@ Works with any MCP-compatible AI client:
 
 ---
 
-## ⚠️ Limitations
+## Limitations
 
 ### Tool-call limits per AI client — read this before your first complex scene
 
@@ -414,7 +434,7 @@ This is how professional Blender artists actually work anyway — lighting the s
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 - Blender 4.5.0 or newer (tested on 4.5.0 — should work on any later version)
 - Python 3.11 or newer (bundled with Blender 4.5+)
@@ -423,7 +443,7 @@ This is how professional Blender artists actually work anyway — lighting the s
 
 ---
 
-## 🗂️ Project structure
+## Project structure
 
 ```
 justthreed/
@@ -443,7 +463,7 @@ justthreed/
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are very welcome! Here is how to get started:
 
@@ -472,7 +492,7 @@ Contributions are very welcome! Here is how to get started:
 
 ---
 
-## 💝 Support this project
+## Support this project
 
 JustThreed is **free and open source forever** — the core tools will always be MIT-licensed and nothing is gated behind a paywall.
 
@@ -497,13 +517,13 @@ If it saves you time or helps you ship a project, please consider supporting con
 
 ---
 
-## 📄 License
+## License
 
 MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE) for details.
 
 ---
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
 - [Blender Foundation](https://www.blender.org/) for the open source 3D software
 - [Anthropic](https://www.anthropic.com/) for the Model Context Protocol
@@ -513,7 +533,7 @@ MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE) for 
 
 ---
 
-## ⭐ Community
+## Community
 
 Found a bug? Open an issue. Have an idea? Start a discussion. Want to contribute? Open a PR.
 
