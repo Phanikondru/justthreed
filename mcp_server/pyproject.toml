@@ -1,16 +1,50 @@
 [project]
 name = "justthreed"
 version = "0.1.0"
-description = "MCP server that exposes Blender control tools to AI clients"
+description = "MCP server that exposes Blender control tools to AI clients (Claude, Gemini, Cursor, Ollama, and more)"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [
   { name = "Phanindhra Kondru" },
 ]
-dependencies = [
-  "mcp[cli]>=1.0",
+keywords = [
+  "blender",
+  "mcp",
+  "model-context-protocol",
+  "ai",
+  "claude",
+  "gemini",
+  "llm",
+  "3d",
+  "3d-modeling",
+  "rendering",
 ]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Plugins",
+  "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Graphics :: 3D Modeling",
+  "Topic :: Multimedia :: Graphics :: 3D Rendering",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "mcp[cli]>=1.0,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/Phanikondru/justthreed"
+Repository = "https://github.com/Phanikondru/justthreed"
+Issues = "https://github.com/Phanikondru/justthreed/issues"
+Documentation = "https://github.com/Phanikondru/justthreed#readme"
+Funding = "https://github.com/sponsors/Phanikondru"
 
 [project.scripts]
 justthreed = "justthreed.server:main"
