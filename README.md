@@ -105,12 +105,28 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 3. Click **Install from Disk** and select `addon.py`
 4. Enable the addon by ticking the checkbox next to **Interface: JustThreed**
 
-### Step 3 — Start the MCP server in Blender
+### Step 3 — Start the MCP socket server in Blender
 
-1. Press **N** in the 3D viewport to open the side panel
-2. Find the **JustThreed** tab
+> ⚠️ **This is a manual step, and you have to do it every single time you open Blender.** JustThreed's Blender addon opens a TCP socket on `localhost:9876` that your AI client talks to. The socket is **not** started automatically when Blender launches — you have to click the button each time. If you skip this step, your AI client will still register the JustThreed MCP server fine (no config error), but every tool call will fail with a "connection refused" error because nothing is actually listening on port 9876. This is the single most common "it was working yesterday, why isn't it working today?" cause.
+
+**To start it:**
+
+1. In Blender, press **N** in the 3D viewport to open the right-hand side panel
+2. Click the **JustThreed** tab
 3. Click **Start MCP Server**
-4. You should see: `JustThreed MCP Server started on port 9876`
+4. Watch Blender's system console for the message `JustThreed MCP Server started on port 9876`. The system console is hidden by default — on Windows, enable it via **Window → Toggle System Console**; on macOS and Linux, launch Blender from a terminal (`/Applications/Blender.app/Contents/MacOS/Blender` on macOS) so console output goes to that terminal.
+
+**To verify from outside Blender** (useful when troubleshooting a stuck setup):
+
+```bash
+lsof -nP -iTCP:9876
+```
+
+If you see a line mentioning `Blender` with `LISTEN`, the socket is live and your AI client can talk to it. If the command returns nothing, the server is not running — go back to step 1. The check works identically on macOS and Linux; on Windows use `netstat -ano | findstr :9876`.
+
+**To stop it:** click **Stop MCP Server** in the same panel, or just quit Blender — the socket is cleaned up automatically on exit.
+
+**Every new Blender session requires repeating these steps.** There is no "start on launch" option yet — auto-start is a tracked feature request on the [Roadmap](#contributing), and a good first contribution for anyone wanting to help out. Until then: open Blender → click Start MCP Server → *then* launch your AI client.
 
 ### Step 4 — Connect your AI client
 
