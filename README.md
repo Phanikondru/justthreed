@@ -24,7 +24,7 @@
   <a href="https://x.com/Phanikondru"><b>@Phanikondru</b></a>
 </p>
 
-<img src="public/cream_jar_final_production.png" alt="Cream jar product render — built entirely with JustThreed" width="760" />
+<img src="public/cream-jar.png" alt="Cream jar product render — built entirely with JustThreed" width="760" />
 
 </div>
 
@@ -64,7 +64,7 @@ Under the hood, JustThreed connects Blender to any AI model through the [Model C
 ## Screenshots & demos
 
 <div align="center">
-<img src="public/cream_jar_final_production.png" alt="Cream jar product render" width="640" />
+<img src="public/cream-jar.png" alt="Cream jar product render" width="640" />
 <br/>
 <i>Cream jar product mockup — modeled, textured, lit, and rendered entirely through natural language prompts. No Blender experience needed.</i>
 </div>

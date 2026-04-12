@@ -17,6 +17,7 @@ import json
 import math
 import os
 import queue
+import signal
 import socket
 import tempfile
 import threading
@@ -27,6 +28,85 @@ import bpy
 from mathutils import Vector
 
 HOST = "localhost"
+
+# ---------- Async render state ----------
+_pending_render = None  # (result_dict, done_event, abs_path, orig_path, orig_format)
+
+
+def _on_render_complete(scene):
+    """Called by Blender when render finishes successfully."""
+    global _pending_render
+    if _pending_render is None:
+        return
+    result, done, abs_path, orig_path, orig_format = _pending_render
+    _pending_render = None
+    scene.render.filepath = orig_path
+    scene.render.image_settings.file_format = orig_format
+    result.update({
+        "ok": True,
+        "path": abs_path,
+        "width": scene.render.resolution_x,
+        "height": scene.render.resolution_y,
+    })
+    done.set()
+    _unregister_render_handlers()
+
+
+def _on_render_cancel(scene):
+    """Called by Blender when render is cancelled (ESC or SIGINT)."""
+    global _pending_render
+    if _pending_render is None:
+        return
+    result, done, abs_path, orig_path, orig_format = _pending_render
+    _pending_render = None
+    scene.render.filepath = orig_path
+    scene.render.image_settings.file_format = orig_format
+    result.update({"ok": False, "error": "Render cancelled by user"})
+    done.set()
+    _unregister_render_handlers()
+
+
+def _unregister_render_handlers():
+    """Remove our render callbacks so they don't fire on unrelated renders."""
+    if _on_render_complete in bpy.app.handlers.render_complete:
+        bpy.app.handlers.render_complete.remove(_on_render_complete)
+    if _on_render_cancel in bpy.app.handlers.render_cancel:
+        bpy.app.handlers.render_cancel.remove(_on_render_cancel)
+
+
+def _start_async_render(cmd, result, done):
+    """Start a non-blocking render that shows Blender's render window."""
+    global _pending_render
+    output_path = cmd.get("output_path")
+    if not output_path:
+        result.update({"ok": False, "error": "'output_path' is required"})
+        done.set()
+        return
+
+    scene = bpy.context.scene
+    abs_path = os.path.abspath(os.path.expanduser(output_path))
+    os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+    orig_path = scene.render.filepath
+    orig_format = scene.render.image_settings.file_format
+
+    ext = os.path.splitext(abs_path)[1].lower()
+    scene.render.image_settings.file_format = {
+        ".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG",
+    }.get(ext, "PNG")
+    scene.render.filepath = abs_path
+
+    # Store state for the callbacks
+    _pending_render = (result, done, abs_path, orig_path, orig_format)
+
+    # Register completion/cancellation handlers
+    bpy.app.handlers.render_complete.append(_on_render_complete)
+    bpy.app.handlers.render_cancel.append(_on_render_cancel)
+
+    # INVOKE_DEFAULT opens the render window and runs non-blocking,
+    # so the main thread stays free for UI updates (progress bar, tiles).
+    bpy.ops.render.render("INVOKE_DEFAULT", write_still=True)
+
+
 PORT = 9876
 
 # Each job: (command_dict, result_dict, done_event)
@@ -939,6 +1019,9 @@ def _dispatch(cmd: dict) -> dict:
         return {"ok": True, "message": f"Deleted {name}"}
 
     if tool == "render_image":
+        # NOTE: render_image is now handled asynchronously in _process_jobs
+        # via _start_async_render() so the render window shows progress.
+        # This fallback should not normally be reached.
         output_path = cmd.get("output_path")
         if not output_path:
             return {"ok": False, "error": "'output_path' is required"}
@@ -1703,43 +1786,84 @@ def _dispatch(cmd: dict) -> dict:
             return err
         distance = float(cmd.get("distance") or 5.0)
         energy = float(cmd.get("energy") or 500.0)
-        # Use the subject's bounding box center as the aim target so off-origin
-        # objects still get framed correctly.
+        add_reflector = bool(cmd.get("reflector", True))
         center = subject.matrix_world.translation
         dims = subject.dimensions
         height_offset = max(float(dims.z) * 0.6, 1.0)
 
-        def _add_area(name, offset, size, energy_scale):
+        def _add_area(name, offset, size, energy_scale, color=(1.0, 1.0, 1.0)):
             loc = (center.x + offset[0], center.y + offset[1], center.z + offset[2])
             data, obj = _new_light("AREA", name, loc)
             data.size = size
             data.energy = energy * energy_scale
-            data.color = (1.0, 1.0, 1.0)
+            data.color = color
             _aim_object_at(obj, center)
             return obj.name
 
+        # Key light: 45° left, elevated — main highlight source
         key_name = _add_area(
             f"Key_{subject.name}",
-            (distance * 0.9, -distance * 0.7, height_offset),
-            size=distance * 0.6,
-            energy_scale=1.0,
+            (-distance * 0.8, -distance * 0.6, height_offset + distance * 0.4),
+            size=distance * 0.5,
+            energy_scale=1.4,
+            color=(1.0, 0.98, 0.95),
         )
+        # Fill light: right side, 90° — half key power, large soft source
         fill_name = _add_area(
             f"Fill_{subject.name}",
-            (-distance * 0.9, -distance * 0.5, height_offset * 0.4),
-            size=distance * 1.2,
-            energy_scale=0.35,
+            (distance * 1.0, 0, height_offset * 0.5),
+            size=distance * 0.8,
+            energy_scale=0.5,
+            color=(1.0, 0.99, 0.97),
         )
+        # Rim light: behind at ~135° — edge separation, makes glossy pop
         rim_name = _add_area(
             f"Rim_{subject.name}",
-            (-distance * 0.2, distance * 1.0, height_offset * 1.2),
-            size=distance * 0.3,
-            energy_scale=0.6,
+            (0, distance * 1.0, height_offset * 0.7),
+            size=distance * 0.6,
+            energy_scale=0.8,
+            color=(1.0, 0.96, 0.98),
         )
+
+        created = [key_name, fill_name, rim_name]
+
+        # Reflector card: white emission plane on the left, bounces key light
+        reflector_name = None
+        if add_reflector:
+            reflector_name = f"Reflector_{subject.name}"
+            bpy.ops.mesh.primitive_plane_add(
+                size=distance * 0.6,
+                location=(
+                    center.x - distance * 0.7,
+                    center.y,
+                    center.z + height_offset * 0.3,
+                ),
+            )
+            reflector = bpy.context.active_object
+            reflector.name = reflector_name
+            reflector.rotation_euler = (0, math.radians(80), math.radians(10))
+            mat = bpy.data.materials.new(name=f"ReflectorMat_{subject.name}")
+            mat.use_nodes = True
+            tree = mat.node_tree
+            tree.nodes.clear()
+            output = tree.nodes.new('ShaderNodeOutputMaterial')
+            output.location = (300, 0)
+            emission = tree.nodes.new('ShaderNodeEmission')
+            emission.location = (0, 0)
+            emission.inputs['Color'].default_value = (1, 1, 1, 1)
+            emission.inputs['Strength'].default_value = 3.0
+            tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
+            reflector.data.materials.append(mat)
+            reflector.visible_camera = False
+            reflector.visible_diffuse = True
+            reflector.visible_glossy = True
+            created.append(reflector_name)
+
         return {
             "ok": True,
             "subject": subject.name,
-            "lights": [key_name, fill_name, rim_name],
+            "lights": created,
+            "reflector": reflector_name,
         }
 
     if tool == "setup_product_studio":
@@ -4004,6 +4128,18 @@ def _process_jobs():
             cmd, result, done = _job_queue.get_nowait()
         except queue.Empty:
             break
+
+        # render_image is handled asynchronously so Blender's UI stays
+        # responsive and the user can see the render progress window.
+        if cmd.get("tool") == "render_image":
+            try:
+                _start_async_render(cmd, result, done)
+            except Exception as exc:
+                traceback.print_exc()
+                result.update({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+                done.set()
+            continue
+
         try:
             result.update(_dispatch(cmd))
         except Exception as exc:
@@ -4036,6 +4172,16 @@ def _handle_connection(conn: socket.socket) -> None:
         if not line:
             return
         cmd = json.loads(line.decode("utf-8"))
+
+        # cancel_render is handled directly on the socket thread (not queued)
+        # because the main thread is blocked by the active render. Sending
+        # SIGINT to our own process is equivalent to pressing ESC in Blender,
+        # which gracefully cancels the in-progress render.
+        if cmd.get("tool") == "cancel_render":
+            os.kill(os.getpid(), signal.SIGINT)
+            result = {"ok": True, "message": "Render cancellation signal sent (SIGINT). The active render should stop shortly."}
+            conn.sendall((json.dumps(result) + "\n").encode("utf-8"))
+            return
 
         wait_timeout = float(cmd.get("_timeout", 15.0))
         conn.settimeout(max(wait_timeout + 5.0, 15.0))

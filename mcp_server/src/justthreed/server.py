@@ -237,32 +237,53 @@ def reorder_modifier(name: str, modifier_name: str, index: int) -> dict:
 
 
 @mcp.tool()
-def render_image(output_path: str) -> dict:
+def render_image(output_path: str, timeout_seconds: int = 1800) -> dict:
     """Render the current scene through the active camera to a file on disk.
     `output_path` should end in .png or .jpg. Uses the scene's current resolution
-    and render engine. Blocks until the render finishes (up to 5 minutes).
+    and render engine.
+
+    `timeout_seconds` controls how long to wait for the render to finish
+    (default 1800 = 30 minutes). Complex scenes with high sample counts can
+    take much longer than simple previews — set a higher value if needed,
+    or reduce samples / resolution first.
 
     IMPORTANT — do NOT call this automatically as a "final step" after finishing
     a modeling, materials, lighting, or scene-setup task. Only call it when the
     user explicitly asks to render or export an image."""
-    return _send({"tool": "render_image", "output_path": output_path}, timeout=300.0)
+    return _send({"tool": "render_image", "output_path": output_path}, timeout=float(timeout_seconds))
 
 
 @mcp.tool()
-def render_and_show(resolution: int = 512) -> Image:
+def render_and_show(resolution: int = 512, timeout_seconds: int = 600) -> Image:
     """Render the current scene at a low preview resolution and return the PNG
     so you can actually see the result. Use this for vision-in-the-loop iteration:
     make a change, render, look at it, decide what to fix, repeat. `resolution` is
     the longest edge in pixels (default 512) — keep it small for fast feedback.
+
+    `timeout_seconds` controls how long to wait (default 600 = 10 minutes).
+    Preview renders are usually fast, but complex scenes with subsurface
+    scattering or volumetrics may take longer even at low resolution.
 
     IMPORTANT — do NOT call this automatically as a "final step" after finishing
     a modeling, materials, lighting, or scene-setup task. Only call it when the
     user explicitly asks to render, preview, or see the result. Rendering is
     expensive and the user wants to control when it happens. Treat task
     completion as the last step unless a render was requested."""
-    response = _send({"tool": "render_and_show", "resolution": resolution}, timeout=300.0)
+    response = _send({"tool": "render_and_show", "resolution": resolution}, timeout=float(timeout_seconds))
     data = base64.b64decode(response["data_base64"])
     return Image(data=data, format="png")
+
+
+@mcp.tool()
+def cancel_render() -> dict:
+    """Cancel the currently running render in Blender. This sends an interrupt
+    signal equivalent to pressing ESC in Blender. Use this when:
+    - A render is taking too long and the user wants to stop it
+    - The user wants to adjust settings and re-render
+    - The user wants to render manually via Blender's UI instead
+
+    Safe to call even if no render is running — Blender ignores the signal."""
+    return _send({"tool": "cancel_render"}, timeout=10.0)
 
 
 # ---------- Phase 7 — Materials + shader node graph ----------
@@ -615,16 +636,21 @@ def setup_three_point_lighting(
     subject_name: str,
     distance: float = 5.0,
     energy: float = 500.0,
+    reflector: bool = True,
 ) -> dict:
     """Build a classic three-point lighting rig (key, fill, rim) around an
-    object, all aimed at its bounding-box center. Returns the three new light
-    names. `distance` is the base radius in meters; `energy` is the key
-    light's base energy — fill and rim are scaled off it."""
+    object, all aimed at its bounding-box center. Returns the new light names.
+    `distance` is the base radius in meters; `energy` is the key light's base
+    energy — fill and rim are scaled off it. Key is at 45° left (warm tint),
+    fill at 90° right (soft, half power), rim behind at 135° (edge separation).
+    When `reflector` is True (default), adds a white emission bounce card on the
+    left side, invisible to camera but visible to reflection rays."""
     return _send({
         "tool": "setup_three_point_lighting",
         "subject_name": subject_name,
         "distance": distance,
         "energy": energy,
+        "reflector": reflector,
     })
 
 
