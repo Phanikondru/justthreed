@@ -5,7 +5,7 @@
 
 <h1>JustThreed</h1>
 
-<p><i>Create production-ready product mockups with natural language.<br/>Describe a product, get a photorealistic render — no 3D experience needed.<br/>Works with Claude, Gemini, ChatGPT, Cursor, VSCode, and local models via Ollama.<br/>One addon. Zero config. Fully free and open source.</i></p>
+<p><i>Product mockups from plain English — built for designers, marketers, and founders, not just 3D artists.<br/>Describe your product, get a photorealistic render. No Blender experience needed.<br/>Works with Claude, Gemini, ChatGPT, Cursor, VSCode, and local models via Ollama.<br/>One addon. Zero config. Fully free and open source.</i></p>
 
 <p>
   <a href="https://github.com/Phanikondru/justthreed/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License" /></a>
@@ -32,9 +32,9 @@
 
 ## What is JustThreed?
 
-JustThreed turns Blender into an AI-powered product mockup studio. Describe the product you want to visualize in plain English — JustThreed handles the modeling, materials, lighting, and rendering. No 3D experience, no scripting, no manual clicking.
+JustThreed lets **anyone** — designers, marketers, founders, freelancers — create professional product mockups using just natural language. You don't need to know Blender, 3D modeling, or scripting. Describe your product in plain English, and JustThreed builds it in Blender: the shape, materials, studio lighting, camera, and final render.
 
-The cream jar hero image above? Built entirely with prompts like these:
+**Our initial focus is product mockups.** Cream jars, perfume bottles, candles, packaging, skincare — any physical product you need to visualize. The cream jar hero image above was built entirely with prompts like these:
 
 ```
 "Create a cream jar with a glossy pink body and a dark glass lid"
@@ -43,7 +43,7 @@ The cream jar hero image above? Built entirely with prompts like these:
 "Render the final product shot at high quality with depth of field"
 ```
 
-JustThreed connects Blender to any AI model through the Model Context Protocol (MCP), so you can use whichever AI client you prefer — Claude, Gemini, ChatGPT, Cursor, or a free local model via Ollama.
+Under the hood, JustThreed connects Blender to any AI model through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). You pick the AI client you already use — Claude, Gemini, ChatGPT, Cursor, or a free local model via Ollama — and JustThreed gives it full control over Blender.
 
 ---
 
@@ -51,10 +51,11 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 
 | Feature | JustThreed | Existing tools |
 |---|---|---|
+| Target audience | Anyone — no 3D skills required | Built for 3D artists |
+| Primary use case | Product mockups from text | General 3D scripting |
 | Setup | Single addon, zero config | Multiple steps, config files |
 | AI models | Claude, Gemini, GPT, Ollama, Cursor | Mostly Claude-only |
 | Chat panel | Built into Blender sidebar | Separate app required |
-| Project memory | Remembers your assets & style | Session only |
 | Cost | 100% free | Some paid tiers |
 | License | MIT open source | Mixed |
 
@@ -65,10 +66,10 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 <div align="center">
 <img src="public/cream_jar_final_production.png" alt="Cream jar product render" width="640" />
 <br/>
-<i>Product-shot cream jar — modeled, textured, lit, and rendered entirely through JustThreed prompts.</i>
+<i>Cream jar product mockup — modeled, textured, lit, and rendered entirely through natural language prompts. No Blender experience needed.</i>
 </div>
 
-> More renders coming soon — product shots, interiors, low-poly scenes, and full walkthrough videos.
+> More product renders coming soon — skincare, packaging, bottles, candles, and full walkthrough videos.
 >
 > **Built something cool with JustThreed?** Share it on X / LinkedIn and tag [@Phanikondru](https://x.com/Phanikondru) — we'll feature community renders here with credit.
 
