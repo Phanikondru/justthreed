@@ -5,7 +5,7 @@
 
 <h1>JustThreed</h1>
 
-<p><i>Control Blender with natural language.<br/>Works with Claude, Gemini, ChatGPT, Cursor, VSCode, and local models via Ollama.<br/>One addon. Zero config. Fully free and open source.</i></p>
+<p><i>Create production-ready product mockups with natural language.<br/>Describe a product, get a photorealistic render — no 3D experience needed.<br/>Works with Claude, Gemini, ChatGPT, Cursor, VSCode, and local models via Ollama.<br/>One addon. Zero config. Fully free and open source.</i></p>
 
 <p>
   <a href="https://github.com/Phanikondru/justthreed/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License" /></a>
@@ -32,14 +32,18 @@
 
 ## What is JustThreed?
 
-JustThreed connects Blender to any AI model through the Model Context Protocol (MCP). Just describe what you want in plain English and watch it appear in Blender — no scripting, no manual clicking, no prior Blender experience needed.
+JustThreed turns Blender into an AI-powered product mockup studio. Describe the product you want to visualize in plain English — JustThreed handles the modeling, materials, lighting, and rendering. No 3D experience, no scripting, no manual clicking.
+
+The cream jar hero image above? Built entirely with prompts like these:
 
 ```
-"Create a low poly cabin in the woods with warm lighting"
-"Add a stone texture to the ground plane"
-"Render the scene from a top-down angle"
-"Create 10 random trees scattered around the scene"
+"Create a cream jar with a glossy pink body and a dark glass lid"
+"Set up a marble surface underneath with soft studio lighting"
+"Add three more jars scattered around the hero jar at different angles"
+"Render the final product shot at high quality with depth of field"
 ```
+
+JustThreed connects Blender to any AI model through the Model Context Protocol (MCP), so you can use whichever AI client you prefer — Claude, Gemini, ChatGPT, Cursor, or a free local model via Ollama.
 
 ---
 
@@ -307,43 +311,48 @@ In Cursor, also raise **Settings → Features → Chat → Max tool calls per re
 
 ### Features
 
-- **Natural language 3D modeling** — create, modify, and delete objects by describing them
-- **Material & texture control** — apply colors, materials, and textures via prompts
-- **Scene management** — control lighting, cameras, and environment
-- **Asset library integration** — pull assets from Poly Haven directly
-- **Python code execution** — run arbitrary Blender Python scripts via AI
-- **Two-way communication** — AI can read your current scene before making changes
+- **Product mockups from text** — describe a product and get a render-ready 3D model with materials, lighting, and camera
+- **Studio-quality rendering** — three-point lighting, depth of field, Cycles/EEVEE, color management — all set up through prompts
+- **Material & texture control** — PBR materials, glass, metal, ceramic, wood — apply and tweak via natural language
+- **Batch variations** — "create 5 color variations of this jar" generates them all in one prompt
+- **Scene management** — control lighting, cameras, backgrounds, and composition
+- **Two-way communication** — AI reads your current scene before making changes, so it never duplicates or overwrites
+- **Save and resume** — save your scene to a `.blend` file tonight, pick it up in a new chat tomorrow
+- **Asset library integration** — pull textures and models from Poly Haven directly
 - **Built-in chat panel** — prompt directly from Blender's sidebar (no app switching)
-- **Project memory** — remembers your asset preferences and scene style
-- **Batch operations** — "create 20 random rock variations with different materials"
+- **Python code execution** — run arbitrary Blender Python scripts via AI for anything the built-in tools don't cover
 
 ### Example prompts
 
-**Basic modeling**
+**Product mockups** (the primary use case right now)
 ```
-Create a simple house with a red roof
-Add windows to the front of the house
-Make the walls white with a rough plaster texture
-```
-
-**Scene building**
-```
-Set up a forest scene with 20 trees of varying heights
-Add golden hour lighting from the left
-Place a stone path leading to the house
+Create a skincare bottle with a matte white body and rose gold cap
+Build a coffee mug with a ceramic glaze material on a wooden table
+Design a perfume bottle with a glass body and metallic spray nozzle
+Create a candle jar with a frosted glass body and a wooden lid
 ```
 
-**Asset integration**
+**Studio setup**
 ```
-Search Poly Haven for a grass texture and apply it to the ground
-Download a rock model from Poly Haven and scatter 15 copies randomly
+Set up three-point lighting for a product shot
+Add a marble surface with soft shadows underneath the product
+Create a seamless white backdrop with rim lighting
+Add depth of field focused on the hero product
 ```
 
-**Advanced**
+**Variations and composition**
 ```
-Look at the current scene and create a Three.js version of it
-Create 5 variations of this chair with different wood materials
-Render the scene at 1920x1080 and save it to my desktop
+Duplicate the bottle and arrange 4 copies in a diagonal layout
+Create 3 color variations of the jar — pink, mint, and lavender
+Scatter the products naturally on the surface like a flatlay
+```
+
+**Render and export**
+```
+Render the final product shot at 1920x1080 with high samples
+Set up the camera at a 45-degree hero angle
+Switch to Cycles for a photorealistic final render
+Save the scene so I can pick it up tomorrow
 ```
 
 ### Supported AI clients
