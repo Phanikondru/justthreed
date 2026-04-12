@@ -34,3 +34,17 @@ CLAUDE.md
 .cursorrules
 .continue/
 .github/copilot-instructions.md
+
+# Gemini
+.gemini/
+
+# Antigravity / other AI tools
+.antigravity/
+.bolt/
+.windsurf/
+.codeium/
+.tabnine/
+.supermaven/
+
+# MCP local config
+.mcp.json
