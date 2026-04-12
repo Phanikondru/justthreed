@@ -1696,6 +1696,228 @@ def execute_python(code: str, undo_label: str | None = None) -> dict:
     )
 
 
+# ---------- Pro modeling tools — curves, revolve, reference workflow ----------
+
+
+@mcp.tool()
+def create_bezier_curve(
+    points: list[list[float]],
+    name: str = "ProfileCurve",
+    closed: bool = False,
+) -> dict:
+    """Create a Bezier curve from control points — the foundation for
+    professional product modeling.
+
+    `points` is a list of coordinate arrays.  Each can be:
+    - [x, z] — 2D profile (y=0), ideal for revolving into round products
+    - [x, y, z] — full 3D curve
+
+    For a bottle profile, trace ONE SIDE of the silhouette from bottom to top:
+      [[3.5, 0], [3.5, 14], [2.0, 16], [1.5, 17]]
+    Then use `revolve_curve` to spin it into a 3D body.
+
+    Handles are set to AUTO for smooth interpolation.  Use 4-8 points for
+    most product profiles — Bezier curves fill in the smoothness."""
+    return _send({"tool": "create_bezier_curve", "points": points, "name": name, "closed": closed})
+
+
+@mcp.tool()
+def revolve_curve(
+    name: str,
+    axis: str = "Z",
+    angle: float = 360,
+    steps: int = 64,
+    subdivisions: int = 0,
+    convert_to_mesh: bool = True,
+) -> dict:
+    """Revolve a Bezier curve around an axis using a Screw modifier —
+    this is how professional 3D artists create bottles, cups, vases,
+    and any round product from a single profile curve.
+
+    Workflow:
+    1. `create_bezier_curve` with the silhouette profile
+    2. `revolve_curve` to spin it → instant 3D body
+
+    `name` — the curve object to revolve.
+    `axis` — X, Y, or Z (default Z = vertical axis).
+    `angle` — degrees to revolve (360 = full circle, 180 = half).
+    `steps` — mesh resolution (64 is smooth, 32 is coarser).
+    `subdivisions` — if > 0, adds a Subdivision Surface modifier.
+    `convert_to_mesh` — if true, converts the result to a mesh for
+    subsequent editing (extrude, bevel, materials, etc.)."""
+    return _send({
+        "tool": "revolve_curve",
+        "name": name,
+        "axis": axis,
+        "angle": angle,
+        "steps": steps,
+        "subdivisions": subdivisions,
+        "convert_to_mesh": convert_to_mesh,
+    })
+
+
+@mcp.tool()
+def set_reference_image(
+    image_path: str,
+    size: float = 5.0,
+    opacity: float = 0.5,
+    height: float = 0.0,
+) -> dict:
+    """Load a reference image into the Blender viewport as a visible guide.
+
+    Places the image as a semi-transparent Empty in the scene so you (and
+    the user) can see it alongside the model being built.  This is how
+    professional 3D artists work — always model against a reference.
+
+    `image_path` — absolute path to the reference image.
+    `size` — display size in Blender units (default 5).
+    `opacity` — transparency 0-1 (default 0.5).
+    `height` — vertical offset to center the reference."""
+    return _send({
+        "tool": "set_reference_image",
+        "file_path": image_path,
+        "size": size,
+        "opacity": opacity,
+        "height": height,
+    })
+
+
+@mcp.tool()
+def compare_to_reference(resolution: int = 512) -> Image:
+    """Render the current scene and return the image so you can compare
+    it against the user's reference image.
+
+    THIS IS THE MOST IMPORTANT TOOL FOR ACCURACY.  Use it after every
+    major modeling step:
+    1. Build/modify the shape
+    2. Call `compare_to_reference` to see the current state
+    3. Compare it against the reference image the user provided
+    4. Identify differences: silhouette, proportions, curves, angles
+    5. Fix them with modeling tools
+    6. Repeat until it matches
+
+    Be specific about what doesn't match:
+    - "Body is too narrow — scale X by 1.3"
+    - "Shoulder taper starts too low — need to adjust profile"
+    - "Pump nozzle angle is 30° but should be 45°"
+
+    Keep iterating until the render matches the reference."""
+    response = _send(
+        {"tool": "render_and_show", "resolution": resolution},
+        timeout=300.0,
+    )
+    data = base64.b64decode(response["data_base64"])
+    return Image(data=data, format="png")
+
+
+# ---------- Product shot composition ----------
+
+
+@mcp.tool()
+def frame_product_shot(
+    subject_name: str,
+    angle: str = "FRONT",
+    composition: str = "GOLDEN_RATIO",
+    lens_mm: float = 85,
+    padding: float = 1.3,
+    aspect: str = "4:5",
+) -> dict:
+    """Auto-frame a product for professional photography composition.
+
+    Calculates the perfect camera position based on the object's bounding
+    box, lens focal length, and composition rule.  Creates (or reuses) a
+    camera, aims it at the subject, and sets it as the active scene camera.
+
+    This is what separates amateur renders from professional product shots.
+
+    `subject_name` — the object to frame.
+    `angle` — camera angle preset:
+      FRONT, FRONT_HIGH, THREE_QUARTER, SIDE, TOP, HERO
+    `composition` — framing rule:
+      GOLDEN_RATIO (default, most pleasing), RULE_OF_THIRDS, CENTER
+    `lens_mm` — focal length (85mm default = product photography standard,
+      50mm for wider context, 135mm for tight detail shots).
+    `padding` — how much space around the object (1.0 = tight, 1.5 = loose).
+    `aspect` — render aspect ratio: 1:1, 4:5, 3:4, 16:9, 9:16."""
+    return _send({
+        "tool": "frame_product_shot",
+        "subject_name": subject_name,
+        "angle": angle,
+        "composition": composition,
+        "lens_mm": lens_mm,
+        "padding": padding,
+        "aspect": aspect,
+    })
+
+
+# ---------- Render optimization ----------
+
+
+@mcp.tool()
+def optimize_cycles(
+    device: str = "GPU",
+    noise_threshold: float = 0.1,
+    samples: int = 128,
+    denoise: bool = True,
+    max_bounces: int = 4,
+    caustics: bool = False,
+    fast_gi: bool = True,
+    persistent_data: bool = True,
+) -> dict:
+    """Configure Cycles for fast, high-quality rendering in one call.
+
+    Applies all major optimizations from professional workflows:
+    - GPU rendering (vs CPU — 10-50x faster)
+    - Adaptive noise threshold (stops early when clean enough)
+    - Optimized light path bounces (fast defaults)
+    - Caustics disabled (big speed win, rarely needed for products)
+    - Fast GI approximation (faster indirect lighting)
+    - Persistent data (keeps textures in memory between renders)
+    - Denoiser enabled (cleans up remaining noise)
+
+    Default settings give ~95% speed improvement over Cycles defaults
+    while maintaining good quality for product visualization.
+
+    For the compare_to_reference iteration loop, these defaults are ideal.
+    For final beauty renders, increase samples to 256-512 and set
+    noise_threshold to 0.01."""
+    return _send({
+        "tool": "optimize_cycles",
+        "device": device,
+        "noise_threshold": noise_threshold,
+        "samples": samples,
+        "denoise": denoise,
+        "max_bounces": max_bounces,
+        "caustics": caustics,
+        "fast_gi": fast_gi,
+        "persistent_data": persistent_data,
+    })
+
+
+# ---------- AI/ML accuracy pipeline — VLM analysis ----------
+
+
+@mcp.tool()
+def analyze_reference_image(image_path: str) -> dict:
+    """Analyse a reference product image using a Vision-Language Model and
+    return a structured spec: object type, shape description, materials,
+    colors, estimated dimensions, and step-by-step modeling hints.
+
+    Use this when the user provides a reference image.  The returned spec
+    tells you exactly how to recreate the object using the existing modeling
+    tools (create_primitive, extrude_faces, bevel_edges, create_pbr_material,
+    etc.).  Read the `modeling_hints` field for a suggested build order.
+
+    `image_path` must be an absolute path to a local image file (PNG, JPG, WEBP).
+
+    Requires a network connection (calls a Hugging Face Space).  Set the env
+    var JUSTTHREED_VLM_SPACE to override the default VLM endpoint."""
+    from justthreed.ml_pipeline import analyze_image
+
+    return analyze_image(image_path)
+
+
+
 def main() -> None:
     mcp.run()
 

@@ -1789,6 +1789,108 @@ def _dispatch(cmd: dict) -> dict:
 
         return {"ok": True, "subject": subject.name, "style": style, "lights": lights}
 
+    if tool == "frame_product_shot":
+        subject, err = _resolve_object(cmd.get("subject_name"))
+        if err:
+            return err
+
+        angle = (cmd.get("angle") or "FRONT").upper()
+        composition = (cmd.get("composition") or "GOLDEN_RATIO").upper()
+        lens_mm = float(cmd.get("lens_mm") or 85)
+        padding = float(cmd.get("padding") or 1.3)  # 1.0 = tight, 1.5 = loose
+
+        # Calculate object bounds in world space.
+        bbox_corners = [subject.matrix_world @ Vector(c) for c in subject.bound_box]
+        bbox_min = Vector((
+            min(c.x for c in bbox_corners),
+            min(c.y for c in bbox_corners),
+            min(c.z for c in bbox_corners),
+        ))
+        bbox_max = Vector((
+            max(c.x for c in bbox_corners),
+            max(c.y for c in bbox_corners),
+            max(c.z for c in bbox_corners),
+        ))
+        center = (bbox_min + bbox_max) / 2
+        dims = bbox_max - bbox_min
+        max_dim = max(dims.x, dims.y, dims.z)
+
+        # Camera distance so the object fills the frame with padding.
+        # d = (size/2) / tan(fov/2)
+        fov_rad = 2 * math.atan(18.0 / lens_mm)  # 36mm sensor half-width
+        cam_distance = (max_dim * padding / 2) / math.tan(fov_rad / 2)
+
+        # Camera position based on angle preset.
+        angle_presets = {
+            "FRONT":       (0, -1, 0.3),
+            "FRONT_HIGH":  (0, -1, 0.7),
+            "THREE_QUARTER": (0.7, -1, 0.5),
+            "SIDE":        (1, 0, 0.3),
+            "TOP":         (0, -0.1, 1),
+            "HERO":        (0.5, -1, 0.35),
+        }
+        if angle not in angle_presets:
+            return {"ok": False, "error": f"Unknown angle {angle!r}. Valid: {sorted(angle_presets)}"}
+        dx, dy, dz = angle_presets[angle]
+        dir_vec = Vector((dx, dy, dz)).normalized()
+        cam_loc = center + dir_vec * cam_distance
+
+        # Composition offset — shift the aim point off-center.
+        # Golden ratio: subject at ~1/1.618 of the frame.
+        aim_target = Vector(center)
+        if composition == "GOLDEN_RATIO":
+            # Offset aim slightly so subject sits at golden ratio intersection.
+            golden = 1.0 / 1.618
+            offset_x = dims.x * (golden - 0.5) * 0.3
+            aim_target.x += offset_x
+        elif composition == "RULE_OF_THIRDS":
+            offset_x = dims.x * (1/3 - 0.5) * 0.3
+            aim_target.x += offset_x
+        # CENTER = no offset
+
+        # Create or reuse camera.
+        cam_name = cmd.get("camera_name") or "ProductCamera"
+        cam_obj = bpy.data.objects.get(cam_name)
+        if cam_obj and cam_obj.type == 'CAMERA':
+            cam_obj.location = cam_loc
+            cam_obj.data.lens = lens_mm
+        else:
+            cam_data = bpy.data.cameras.new(name=cam_name)
+            cam_data.lens = lens_mm
+            cam_obj = bpy.data.objects.new(cam_name, cam_data)
+            bpy.context.collection.objects.link(cam_obj)
+            cam_obj.location = cam_loc
+
+        _aim_object_at(cam_obj, aim_target)
+        bpy.context.scene.camera = cam_obj
+
+        # Set render resolution — product photography aspect ratios.
+        aspect = (cmd.get("aspect") or "4:5").replace(" ", "")
+        aspect_map = {
+            "1:1": (1080, 1080),
+            "4:5": (1080, 1350),
+            "3:4": (1080, 1440),
+            "16:9": (1920, 1080),
+            "9:16": (1080, 1920),
+        }
+        if aspect in aspect_map:
+            w, h = aspect_map[aspect]
+            bpy.context.scene.render.resolution_x = w
+            bpy.context.scene.render.resolution_y = h
+
+        return {
+            "ok": True,
+            "message": f"Product shot framed: {angle} angle, {composition} composition, {lens_mm}mm lens",
+            "camera": cam_obj.name,
+            "camera_location": list(cam_obj.location),
+            "aim_target": list(aim_target),
+            "distance": round(cam_distance, 2),
+            "lens_mm": lens_mm,
+            "angle": angle,
+            "composition": composition,
+            "aspect": aspect,
+        }
+
     # ---------- Phase 12 — Edit mode / hard-surface modeling ----------
 
     if tool == "enter_edit_mode":
@@ -3312,6 +3414,104 @@ def _dispatch(cmd: dict) -> dict:
             ),
         }
 
+    if tool == "optimize_cycles":
+        scene = bpy.context.scene
+        if scene.render.engine != "CYCLES":
+            scene.render.engine = "CYCLES"
+
+        cycles = scene.cycles
+
+        # 1. GPU rendering.
+        device = (cmd.get("device") or "GPU").upper()
+        cycles.device = device
+
+        # 2. Noise threshold — adaptive sampling.
+        noise_threshold = cmd.get("noise_threshold")
+        if noise_threshold is not None:
+            cycles.use_adaptive_sampling = True
+            cycles.adaptive_threshold = float(noise_threshold)
+        else:
+            cycles.use_adaptive_sampling = True
+            cycles.adaptive_threshold = 0.1  # fast default
+
+        # Max samples (adaptive sampling will stop earlier if threshold met).
+        samples = cmd.get("samples")
+        if samples is not None:
+            cycles.samples = int(samples)
+        else:
+            cycles.samples = 128  # reasonable cap
+
+        # 3. Denoising.
+        denoise = cmd.get("denoise")
+        cycles.use_denoising = bool(denoise) if denoise is not None else True
+
+        # 4. Light path bounces.
+        bounces = cmd.get("max_bounces")
+        if bounces is not None:
+            cycles.max_bounces = int(bounces)
+        else:
+            cycles.max_bounces = 4  # fast default
+
+        diffuse_bounces = cmd.get("diffuse_bounces")
+        if diffuse_bounces is not None:
+            cycles.diffuse_bounces = int(diffuse_bounces)
+        else:
+            cycles.diffuse_bounces = 2
+
+        glossy_bounces = cmd.get("glossy_bounces")
+        if glossy_bounces is not None:
+            cycles.glossy_bounces = int(glossy_bounces)
+        else:
+            cycles.glossy_bounces = 2
+
+        transmission_bounces = cmd.get("transmission_bounces")
+        if transmission_bounces is not None:
+            cycles.transmission_bounces = int(transmission_bounces)
+        else:
+            cycles.transmission_bounces = 2
+
+        transparent_bounces = cmd.get("transparent_max_bounces")
+        if transparent_bounces is not None:
+            cycles.transparent_max_bounces = int(transparent_bounces)
+        else:
+            cycles.transparent_max_bounces = 4
+
+        # 5. Caustics — disable for speed unless explicitly needed.
+        caustics = cmd.get("caustics")
+        if caustics is not None:
+            cycles.caustics_reflective = bool(caustics)
+            cycles.caustics_refractive = bool(caustics)
+        else:
+            cycles.caustics_reflective = False
+            cycles.caustics_refractive = False
+
+        # 6. Fast GI approximation.
+        fast_gi = cmd.get("fast_gi")
+        if fast_gi is not None:
+            cycles.use_fast_gi = bool(fast_gi)
+        else:
+            cycles.use_fast_gi = True
+
+        # 7. Performance — persistent data.
+        persistent = cmd.get("persistent_data")
+        if persistent is not None:
+            scene.render.use_persistent_data = bool(persistent)
+        else:
+            scene.render.use_persistent_data = True
+
+        return {
+            "ok": True,
+            "message": "Cycles optimized for fast rendering",
+            "device": cycles.device,
+            "noise_threshold": cycles.adaptive_threshold,
+            "samples": cycles.samples,
+            "denoising": cycles.use_denoising,
+            "max_bounces": cycles.max_bounces,
+            "caustics": cycles.caustics_reflective,
+            "fast_gi": cycles.use_fast_gi,
+            "persistent_data": scene.render.use_persistent_data,
+        }
+
     if tool == "set_color_management":
         scene = bpy.context.scene
         view = scene.view_settings
@@ -3607,6 +3807,191 @@ def _dispatch(cmd: dict) -> dict:
             "stdout": stdout_buf.getvalue(),
             "stderr": stderr_buf.getvalue(),
             "result_repr": result_repr,
+        }
+
+    # ---------- Pro modeling tools — curves, revolve, reference workflow ----------
+
+    if tool == "create_bezier_curve":
+        points = cmd.get("points")  # list of [x, y, z] or [x, z] (2D profile)
+        if not points or not isinstance(points, list) or len(points) < 2:
+            return {"ok": False, "error": "'points' must be a list of at least 2 coordinate arrays"}
+
+        name = cmd.get("name") or "ProfileCurve"
+        closed = bool(cmd.get("closed", False))
+
+        # Normalize to 3D — if 2D points given, treat as (X, Z) profile for revolving.
+        pts_3d = []
+        for p in points:
+            if len(p) == 2:
+                pts_3d.append((float(p[0]), 0.0, float(p[1])))
+            elif len(p) >= 3:
+                pts_3d.append((float(p[0]), float(p[1]), float(p[2])))
+            else:
+                return {"ok": False, "error": f"Each point needs 2 or 3 coordinates, got {len(p)}"}
+
+        # Create curve data.
+        curve_data = bpy.data.curves.new(name=name, type='CURVE')
+        curve_data.dimensions = '3D'
+        curve_data.resolution_u = 24
+
+        spline = curve_data.splines.new('BEZIER')
+        spline.bezier_points.add(len(pts_3d) - 1)  # one already exists
+        spline.use_cyclic_u = closed
+
+        for i, co in enumerate(pts_3d):
+            bp = spline.bezier_points[i]
+            bp.co = co
+            bp.handle_left_type = 'AUTO'
+            bp.handle_right_type = 'AUTO'
+
+        curve_obj = bpy.data.objects.new(name, curve_data)
+        bpy.context.collection.objects.link(curve_obj)
+        _select_only(curve_obj)
+
+        return {
+            "ok": True,
+            "message": f"Created Bezier curve '{curve_obj.name}' with {len(pts_3d)} control points",
+            "name": curve_obj.name,
+            "point_count": len(pts_3d),
+            "closed": closed,
+        }
+
+    if tool == "revolve_curve":
+        obj, err = _resolve_object(cmd.get("name"))
+        if err:
+            return err
+
+        axis = (cmd.get("axis") or "Z").upper()
+        if axis not in ("X", "Y", "Z"):
+            return {"ok": False, "error": f"axis must be X, Y, or Z, got {axis!r}"}
+        angle_deg = float(cmd.get("angle") or 360)
+        steps = int(cmd.get("steps") or 64)
+        convert_to_mesh = cmd.get("convert_to_mesh", True)
+
+        _select_only(obj)
+
+        # Add Screw modifier.
+        mod = obj.modifiers.new(name="Revolve", type='SCREW')
+        mod.axis = axis
+        mod.angle = math.radians(angle_deg)
+        mod.steps = steps
+        mod.render_steps = steps
+        mod.use_merge_vertices = True
+        mod.merge_threshold = 0.001
+
+        # Optionally add Subdivision Surface for smoothness.
+        if cmd.get("subdivisions"):
+            sub = obj.modifiers.new(name="Smooth", type='SUBSURF')
+            sub.levels = int(cmd.get("subdivisions"))
+            sub.render_levels = int(cmd.get("subdivisions"))
+
+        # Convert to mesh so subsequent tools (extrude, bevel, etc.) work.
+        if convert_to_mesh:
+            bpy.ops.object.convert(target='MESH')
+
+        return {
+            "ok": True,
+            "message": f"Revolved '{obj.name}' {angle_deg}° around {axis} axis ({steps} steps)",
+            "name": obj.name,
+            "axis": axis,
+            "angle": angle_deg,
+            "steps": steps,
+            "converted_to_mesh": convert_to_mesh,
+            "vertex_count": len(obj.data.vertices) if obj.type == 'MESH' else None,
+        }
+
+    if tool == "set_reference_image":
+        file_path = cmd.get("file_path")
+        if not file_path or not isinstance(file_path, str):
+            return {"ok": False, "error": "'file_path' is required"}
+
+        import pathlib
+        fp = pathlib.Path(file_path)
+        if not fp.is_file():
+            return {"ok": False, "error": f"File not found: {file_path}"}
+
+        # Load or reuse the image datablock.
+        img_name = fp.stem
+        img = bpy.data.images.get(img_name)
+        if img is None:
+            img = bpy.data.images.load(str(fp))
+            img.name = img_name
+
+        # Create an Empty → Image reference in the scene (visible in viewport).
+        empty = bpy.data.objects.new(f"Ref_{img_name}", None)
+        empty.empty_display_type = 'IMAGE'
+        empty.data = img
+        empty.empty_display_size = float(cmd.get("size") or 5.0)
+        empty.empty_image_side = 'FRONT'
+
+        # Position it: default at origin facing front, slight offset behind.
+        loc = cmd.get("location")
+        if loc and len(loc) >= 3:
+            empty.location = (float(loc[0]), float(loc[1]), float(loc[2]))
+        else:
+            empty.location = (0, -0.5, float(cmd.get("height") or 0))
+
+        # Make semi-transparent so it doesn't obscure the model.
+        empty.color[3] = float(cmd.get("opacity") or 0.5)
+        empty.show_in_front = True
+
+        bpy.context.collection.objects.link(empty)
+
+        return {
+            "ok": True,
+            "message": f"Reference image '{img_name}' loaded as viewport guide",
+            "name": empty.name,
+            "image": img_name,
+            "size": empty.empty_display_size,
+        }
+
+    # ---------- Stage A — import mesh from file (for ML pipeline retrieval) ----------
+
+    if tool == "import_mesh_file":
+        file_path = cmd.get("file_path")
+        if not file_path or not isinstance(file_path, str):
+            return {"ok": False, "error": "'file_path' is required"}
+
+        import pathlib
+        fp = pathlib.Path(file_path)
+        if not fp.is_file():
+            return {"ok": False, "error": f"File not found: {file_path}"}
+
+        ext = fp.suffix.lower()
+        before_names = set(o.name for o in bpy.data.objects)
+
+        try:
+            if ext in (".glb", ".gltf"):
+                bpy.ops.import_scene.gltf(filepath=str(fp))
+            elif ext == ".obj":
+                bpy.ops.wm.obj_import(filepath=str(fp))
+            elif ext == ".fbx":
+                bpy.ops.import_scene.fbx(filepath=str(fp))
+            elif ext == ".stl":
+                bpy.ops.import_mesh.stl(filepath=str(fp))
+            elif ext == ".ply":
+                bpy.ops.import_mesh.ply(filepath=str(fp))
+            else:
+                return {"ok": False, "error": f"Unsupported format: {ext}"}
+        except Exception as exc:
+            return {"ok": False, "error": f"Import failed: {exc}"}
+
+        after_names = set(o.name for o in bpy.data.objects)
+        new_names = sorted(after_names - before_names)
+
+        # Optionally rename the root imported object.
+        rename = cmd.get("object_name")
+        if rename and new_names:
+            root = bpy.data.objects.get(new_names[0])
+            if root:
+                root.name = rename
+                new_names[0] = rename
+
+        return {
+            "ok": True,
+            "message": f"Imported {len(new_names)} object(s) from {fp.name}",
+            "imported_objects": new_names,
+            "format": ext,
         }
 
     return {"ok": False, "error": f"Unknown tool: {tool!r}"}

@@ -24,8 +24,7 @@
   <a href="https://x.com/Phanikondru"><b>@Phanikondru</b></a>
 </p>
 
-<!-- TODO: drop a hero screenshot or short demo gif here once available. -->
-<!-- <img src=".github/assets/hero.gif" alt="JustThreed demo" width="760" /> -->
+<img src="public/cream_jar_final_production.png" alt="Cream jar product render — built entirely with JustThreed" width="760" />
 
 </div>
 
@@ -59,9 +58,13 @@ JustThreed connects Blender to any AI model through the Model Context Protocol (
 
 ## Screenshots & demos
 
-> 🚧 **Screenshots and demo videos coming in the next release.**
->
-> We're putting together a set of before/after shots and short screen recordings showing real prompts turning into finished renders — product shots, interiors, low-poly scenes, and a full hero-render walkthrough. They'll drop into this section as they land.
+<div align="center">
+<img src="public/cream_jar_final_production.png" alt="Cream jar product render" width="640" />
+<br/>
+<i>Product-shot cream jar — modeled, textured, lit, and rendered entirely through JustThreed prompts.</i>
+</div>
+
+> More renders coming soon — product shots, interiors, low-poly scenes, and full walkthrough videos.
 >
 > **Built something cool with JustThreed?** Share it on X / LinkedIn and tag [@Phanikondru](https://x.com/Phanikondru) — we'll feature community renders here with credit.
 
