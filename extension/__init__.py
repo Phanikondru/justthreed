@@ -439,6 +439,39 @@ _VIEW_TRANSFORM_ALIASES = {
     "FALSE_COLOR": "False Color",
 }
 
+
+def _resolve_look(requested, view_transform, valid_looks):
+    """Match a user-supplied `look` against Blender's enum.
+
+    Blender 4.x namespaces looks by view transform (e.g. "AgX - Medium High
+    Contrast", "Filmic - High Contrast"). Older callers pass the bare tail
+    ("Medium High Contrast"), which no longer exists under AgX. This helper
+    tries the raw value first, then reattaches / swaps the view-transform
+    prefix so the old shorthand keeps working. Returns the valid enum
+    identifier or None if nothing matches.
+    """
+    if requested is None:
+        return None
+    if requested in valid_looks:
+        return requested
+    # Strip any existing "<prefix> - " so we can rebuild it.
+    tail = requested.split(" - ", 1)[1] if " - " in requested else requested
+    candidates = [
+        f"{view_transform} - {tail}",
+        tail,
+        f"{view_transform} - {requested}",
+    ]
+    for candidate in candidates:
+        if candidate in valid_looks:
+            return candidate
+    # Case-insensitive fallback.
+    lowered = {v.lower(): v for v in valid_looks}
+    for candidate in candidates + [requested]:
+        hit = lowered.get(candidate.lower())
+        if hit:
+            return hit
+    return None
+
 _COMPOSITOR_NODE_TYPES = {
     "RENDER_LAYERS":    "CompositorNodeRLayers",
     "COMPOSITE":        "CompositorNodeComposite",
@@ -3291,10 +3324,20 @@ def _dispatch(cmd: dict) -> dict:
                 return {"ok": False, "error": f"Unknown view_transform {canonical!r}: {exc}"}
         look = cmd.get("look")
         if look is not None:
-            try:
-                view.look = look
-            except TypeError as exc:
-                return {"ok": False, "error": f"Unknown look {look!r}: {exc}"}
+            valid_looks = [
+                item.identifier
+                for item in view.bl_rna.properties["look"].enum_items
+            ]
+            resolved = _resolve_look(look, view.view_transform, valid_looks)
+            if resolved is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Unknown look {look!r} for view_transform "
+                        f"{view.view_transform!r}. Valid looks: {valid_looks}"
+                    ),
+                }
+            view.look = resolved
         exposure = cmd.get("exposure")
         if exposure is not None:
             view.exposure = float(exposure)

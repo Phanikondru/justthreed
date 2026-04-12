@@ -240,7 +240,11 @@ def reorder_modifier(name: str, modifier_name: str, index: int) -> dict:
 def render_image(output_path: str) -> dict:
     """Render the current scene through the active camera to a file on disk.
     `output_path` should end in .png or .jpg. Uses the scene's current resolution
-    and render engine. Blocks until the render finishes (up to 5 minutes)."""
+    and render engine. Blocks until the render finishes (up to 5 minutes).
+
+    IMPORTANT — do NOT call this automatically as a "final step" after finishing
+    a modeling, materials, lighting, or scene-setup task. Only call it when the
+    user explicitly asks to render or export an image."""
     return _send({"tool": "render_image", "output_path": output_path}, timeout=300.0)
 
 
@@ -249,7 +253,13 @@ def render_and_show(resolution: int = 512) -> Image:
     """Render the current scene at a low preview resolution and return the PNG
     so you can actually see the result. Use this for vision-in-the-loop iteration:
     make a change, render, look at it, decide what to fix, repeat. `resolution` is
-    the longest edge in pixels (default 512) — keep it small for fast feedback."""
+    the longest edge in pixels (default 512) — keep it small for fast feedback.
+
+    IMPORTANT — do NOT call this automatically as a "final step" after finishing
+    a modeling, materials, lighting, or scene-setup task. Only call it when the
+    user explicitly asks to render, preview, or see the result. Rendering is
+    expensive and the user wants to control when it happens. Treat task
+    completion as the last step unless a render was requested."""
     response = _send({"tool": "render_and_show", "resolution": resolution}, timeout=300.0)
     data = base64.b64decode(response["data_base64"])
     return Image(data=data, format="png")
@@ -1538,9 +1548,12 @@ def set_color_management(
 ) -> dict:
     """Set the scene's color management. `view_transform` is STANDARD,
     FILMIC, FILMIC_LOG, AGX (Blender 4.0+), KHRONOS_PBR_NEUTRAL, RAW, or
-    FALSE_COLOR. `look` is a contrast preset ("None", "Medium High Contrast",
-    "High Contrast", "AgX - Punchy", etc. — exact strings depend on the
-    view transform). `exposure` is in stops, `gamma` is a post-gamma."""
+    FALSE_COLOR. `look` is a contrast preset — Blender 4.x namespaces
+    looks by view transform ("AgX - Medium High Contrast", "Filmic - High
+    Contrast", etc.), but you can also pass the bare tail ("Medium High
+    Contrast", "Punchy") and the server will auto-prefix with the active
+    view transform. On a miss the server returns the full valid list.
+    `exposure` is in stops, `gamma` is a post-gamma."""
     return _send({
         "tool": "set_color_management",
         "view_transform": view_transform,

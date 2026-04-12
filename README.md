@@ -11,6 +11,7 @@
   <a href="https://github.com/Phanikondru/justthreed/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License" /></a>
   <img src="https://img.shields.io/badge/Blender-4.5%2B-orange?style=flat-square" alt="Blender 4.5+" />
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square" alt="Python 3.11+" />
+  <a href="https://pypi.org/project/justthreed/"><img src="https://img.shields.io/pypi/v/justthreed?style=flat-square&color=blue" alt="PyPI" /></a>
   <a href="https://github.com/sponsors/Phanikondru"><img src="https://img.shields.io/github/sponsors/Phanikondru?label=Sponsor&logo=GitHub&color=ea4aaa&style=flat-square" alt="Sponsor" /></a>
   <a href="https://github.com/Phanikondru/justthreed/stargazers"><img src="https://img.shields.io/github/stars/Phanikondru/justthreed?style=flat-square&color=yellow" alt="Stars" /></a>
 </p>
@@ -85,6 +86,18 @@ The Blender addon opens a TCP socket and waits for commands. The MCP server sits
 ## Local setup
 
 > This is the current install path. Once JustThreed is published to the Blender Extensions platform, a one-click install will be available — see [Blender Extension — coming soon](#blender-extension--coming-soon) below.
+
+### Step 0 — How the MCP server is installed (you probably don't need to do anything)
+
+The JustThreed MCP server is [published on PyPI](https://pypi.org/project/justthreed/). When you configure your AI client in Step 4, the `uvx justthreed` command automatically downloads and runs it from PyPI — no manual `pip install` needed.
+
+If you prefer a manual install for any reason:
+
+```bash
+pip install justthreed
+```
+
+Then replace `"command": "uvx"` with `"command": "justthreed"` in the AI client configs below.
 
 ### Step 1 — Install uv
 
