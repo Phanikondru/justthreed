@@ -67,6 +67,10 @@ Under the hood, JustThreed connects Blender to any AI model through the [Model C
 <img src="public/cream-jar.png" alt="Cream jar product render" width="640" />
 <br/>
 <i>Cream jar product mockup — modeled, textured, lit, and rendered entirely through natural language prompts. No Blender experience needed.</i>
+<br/><br/>
+<img src="public/smart-bottle.png" alt="Smart bottle product render" width="640" />
+<br/>
+<i>Smart bottle product mockup — generated end-to-end via natural language prompts.</i>
 </div>
 
 > More product renders coming soon — skincare, packaging, bottles, candles, and full walkthrough videos.
