@@ -12,7 +12,12 @@
   <a href="https://github.com/Phanikondru/justthreed/stargazers"><img src="https://img.shields.io/github/stars/Phanikondru/justthreed?style=flat-square&color=yellow" alt="Stars" /></a>
 </p>
 
-<img src="public/cream-jar.png" alt="Cream jar product render — built entirely with JustThreed" width="720" />
+<table>
+  <tr>
+    <td><img src="public/cream-jar.png" alt="Cream jar product render — built entirely with JustThreed" width="360" /></td>
+    <td><img src="public/smart-bottle.png" alt="Smart bottle product render — built entirely with JustThreed" width="360" /></td>
+  </tr>
+</table>
 
 </div>
 
