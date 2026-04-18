@@ -48,3 +48,13 @@ CLAUDE.md
 
 # MCP local config
 .mcp.json
+
+# Local 3D assets and renders (regenerated from source)
+blends/
+renders/
+*.blend
+*.blend1
+*.blend2
+
+# Reference material (not part of the codebase)
+hard-surface.pdf

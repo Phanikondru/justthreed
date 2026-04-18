@@ -933,6 +933,201 @@ def _collect_indexed(sequence, indices, label):
     return out, None
 
 
+def _safe_rounded_box(name, W, H, D, corner_r, edge_bevel, segments, location):
+    """Shared builder for create_rounded_box / create_phone_body. Front face on XZ, extrudes along +Y."""
+    if W <= 0 or H <= 0 or D <= 0:
+        return {"ok": False, "error": "width/height/depth must all be > 0"}
+    max_corner = min(W, H) / 2.0
+    if corner_r <= 0 or corner_r >= max_corner:
+        return {"ok": False, "error": f"corner_radius exceeds safe bounds: must be in (0, {max_corner:.4f})"}
+    if edge_bevel <= 0.0 and corner_r > D / 2.0 + 0.001:
+        return {"ok": False, "error": f"corner_radius exceeds safe bounds: with edge_bevel=0, must be <= depth/2 ({D/2.0:.4f})"}
+
+    lx, ly, lz = float(location[0]), float(location[1]), float(location[2])
+
+    # Plane in XZ at the back face.
+    bpy.ops.mesh.primitive_plane_add(location=(lx, ly - D / 2.0, lz))
+    obj = bpy.context.active_object
+    obj.name = name
+    obj.rotation_euler = (math.pi / 2, 0.0, 0.0)
+    obj.scale = (W / 2.0, 1.0, H / 2.0)
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+
+    # Vertex-bevel the 4 corners with bmesh.
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bmesh.ops.bevel(
+        bm,
+        geom=list(bm.verts),
+        offset=corner_r,
+        segments=segments,
+        profile=0.5,
+        affect="VERTICES",
+        clamp_overlap=True,
+    )
+    bm.normal_update()
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+
+    # Extrude along +Y.
+    _select_only(obj)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.extrude_region_move(TRANSFORM_OT_translate={"value": (0.0, D, 0.0)})
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    if edge_bevel > 0.0:
+        mod = obj.modifiers.new(name="_jt_rail_bevel", type="BEVEL")
+        mod.width = edge_bevel
+        mod.segments = 6
+        mod.profile = 0.55
+        mod.limit_method = "ANGLE"
+        mod.angle_limit = math.radians(30)
+        _select_only(obj)
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+        except RuntimeError as exc:
+            if mod.name in obj.modifiers:
+                obj.modifiers.remove(obj.modifiers[mod.name])
+            return {"ok": False, "error": f"rail bevel apply failed: {exc}"}
+
+    _select_only(obj)
+    try:
+        bpy.ops.object.shade_smooth()
+        bpy.ops.object.shade_auto_smooth(angle=math.radians(55))
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "name": obj.name,
+        "dimensions": [round(v, 6) for v in obj.dimensions],
+    }
+
+
+def _axis_vector(axis_str):
+    """Resolve an axis string ('X','Y','Z','+X','-Y',...) to a unit Vector."""
+    s = (axis_str or "").strip().upper()
+    if not s:
+        return None
+    sign = 1.0
+    if s[0] in "+-":
+        sign = -1.0 if s[0] == "-" else 1.0
+        s = s[1:]
+    if s not in ("X", "Y", "Z"):
+        return None
+    base = {"X": Vector((1.0, 0.0, 0.0)), "Y": Vector((0.0, 1.0, 0.0)), "Z": Vector((0.0, 0.0, 1.0))}[s]
+    return base * sign
+
+
+def _crease_layer(bm):
+    """Best-effort fetch/create the edge crease layer across Blender 4.x variants."""
+    try:
+        layer = bm.edges.layers.float.get("crease_edge")
+        if layer is None:
+            layer = bm.edges.layers.float.new("crease_edge")
+        return layer
+    except Exception:
+        pass
+    try:
+        return bm.edges.layers.crease.verify()
+    except Exception:
+        return None
+
+
+def _bweight_layer(bm):
+    """Best-effort fetch/create the edge bevel-weight layer across Blender 4.x variants."""
+    try:
+        layer = bm.edges.layers.float.get("bevel_weight_edge")
+        if layer is None:
+            layer = bm.edges.layers.float.new("bevel_weight_edge")
+        return layer
+    except Exception:
+        pass
+    try:
+        return bm.edges.layers.bevel_weight.verify()
+    except Exception:
+        return None
+
+
+def _select_edges_by_mode(bm, mode, sharp_angle=30.0, plane_axis=None, plane_value=None, tol=0.005, matrix=None):
+    """Return a list of bmesh edges matching `mode`. Used by crease/bweight/support/select tools."""
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    mode = (mode or "sharp").lower()
+    if mode == "all":
+        return list(bm.edges)
+    if mode == "selected":
+        return [e for e in bm.edges if e.select]
+    if mode == "boundary":
+        return [e for e in bm.edges if len(e.link_faces) == 1]
+    if mode == "non_manifold":
+        return [e for e in bm.edges if not e.is_manifold]
+    if mode == "sharp":
+        thresh = math.radians(sharp_angle)
+        out = []
+        for e in bm.edges:
+            if len(e.link_faces) != 2:
+                continue
+            try:
+                ang = e.calc_face_angle(0.0)
+            except (ValueError, RuntimeError):
+                continue
+            if ang >= thresh:
+                out.append(e)
+        return out
+    if mode == "by_plane":
+        if plane_axis is None or plane_value is None:
+            return []
+        idx = {"X": 0, "Y": 1, "Z": 2}.get(plane_axis.upper())
+        if idx is None:
+            return []
+        out = []
+        mw = matrix
+        for e in bm.edges:
+            v0, v1 = e.verts[0].co, e.verts[1].co
+            if mw is not None:
+                v0 = mw @ v0
+                v1 = mw @ v1
+            if abs(v0[idx] - plane_value) <= tol and abs(v1[idx] - plane_value) <= tol:
+                out.append(e)
+        return out
+    return []
+
+
+def _select_faces_by_normal(bm, normal_vec, tolerance=0.1):
+    """Return faces whose normal dotted with `normal_vec` exceeds 1 - tolerance."""
+    bm.faces.ensure_lookup_table()
+    n = Vector(normal_vec)
+    if n.length == 0:
+        return []
+    n = n.normalized()
+    cutoff = 1.0 - float(tolerance)
+    out = []
+    for f in bm.faces:
+        if f.normal.length == 0:
+            continue
+        if f.normal.normalized().dot(n) >= cutoff:
+            out.append(f)
+    return out
+
+
+def _named_axis_normal(name):
+    """Map +/-X/Y/Z aliases like 'top'/'front' to a unit normal Vector."""
+    table = {
+        "top": Vector((0.0, 0.0, 1.0)),
+        "bottom": Vector((0.0, 0.0, -1.0)),
+        "front": Vector((0.0, -1.0, 0.0)),
+        "back": Vector((0.0, 1.0, 0.0)),
+        "right": Vector((1.0, 0.0, 0.0)),
+        "left": Vector((-1.0, 0.0, 0.0)),
+    }
+    return table.get((name or "").lower())
+
+
 def _dispatch(cmd: dict) -> dict:
     tool = cmd.get("tool")
 
@@ -984,6 +1179,108 @@ def _dispatch(cmd: dict) -> dict:
                 "uv_layers": [layer.name for layer in mesh.uv_layers],
             }
         return {"ok": True, "object": info}
+
+    if tool == "create_capsule":
+        length = float(cmd.get("length") or 2.0)
+        height = float(cmd.get("height") or 1.0)
+        depth = float(cmd.get("depth") or 1.0)
+        segments = max(3, int(cmd.get("segments") or 32))
+        name = cmd.get("name") or "Capsule"
+        if height <= 0 or length < height:
+            return {"ok": False, "error": "`length` must be >= `height`, both > 0"}
+        r = height / 2.0
+        half = length / 2.0 - r
+        me = bpy.data.meshes.new(name)
+        obj = bpy.data.objects.new(name, me)
+        bpy.context.collection.objects.link(obj)
+        bm = bmesh.new()
+        ring = []
+        for i in range(segments + 1):
+            a = -math.pi / 2 + math.pi * (i / segments)
+            ring.append((half + r * math.cos(a), r * math.sin(a), -depth / 2))
+        for i in range(segments + 1):
+            a = math.pi / 2 + math.pi * (i / segments)
+            ring.append((-half + r * math.cos(a), r * math.sin(a), -depth / 2))
+        bv = [bm.verts.new(v) for v in ring]
+        bm.faces.new(bv)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+        g = bmesh.ops.extrude_face_region(bm, geom=bm.faces[:])
+        vn = [v for v in g["geom"] if isinstance(v, bmesh.types.BMVert)]
+        bmesh.ops.translate(bm, verts=vn, vec=(0, 0, depth))
+        bm.to_mesh(me); bm.free()
+        loc = tuple(cmd.get("location") or (0.0, 0.0, 0.0))
+        obj.location = loc
+        obj.rotation_euler = tuple(cmd.get("rotation") or (0.0, 0.0, 0.0))
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        try:
+            bpy.ops.object.shade_auto_smooth(angle=math.radians(35))
+        except Exception:
+            bpy.ops.object.shade_smooth()
+        return {"ok": True, "name": obj.name, "type": "MESH"}
+
+    if tool == "create_rounded_rect":
+        width = float(cmd.get("width") or 2.0)
+        height = float(cmd.get("height") or 1.0)
+        depth = float(cmd.get("depth") or 0.2)
+        r = float(cmd.get("corner_radius") or 0.1)
+        corner_segments = max(1, int(cmd.get("corner_segments") or 16))
+        name = cmd.get("name") or "RoundedRect"
+        if r <= 0 or r > min(width, height) / 2:
+            return {"ok": False, "error": "`corner_radius` must be > 0 and <= min(width,height)/2"}
+        me = bpy.data.meshes.new(name)
+        obj = bpy.data.objects.new(name, me)
+        bpy.context.collection.objects.link(obj)
+        bm = bmesh.new()
+        cx = width / 2 - r
+        cy = height / 2 - r
+        centers = [(cx, cy), (-cx, cy), (-cx, -cy), (cx, -cy)]
+        starts = [0.0, math.pi / 2, math.pi, 3 * math.pi / 2]
+        verts = []
+        for (cxi, cyi), s in zip(centers, starts):
+            for i in range(corner_segments + 1):
+                a = s + (math.pi / 2) * (i / corner_segments)
+                verts.append((cxi + r * math.cos(a), cyi + r * math.sin(a), -depth / 2))
+        bv = [bm.verts.new(v) for v in verts]
+        bm.faces.new(bv)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+        if depth > 0:
+            g = bmesh.ops.extrude_face_region(bm, geom=bm.faces[:])
+            vn = [v for v in g["geom"] if isinstance(v, bmesh.types.BMVert)]
+            bmesh.ops.translate(bm, verts=vn, vec=(0, 0, depth))
+        bm.to_mesh(me); bm.free()
+        obj.location = tuple(cmd.get("location") or (0.0, 0.0, 0.0))
+        obj.rotation_euler = tuple(cmd.get("rotation") or (0.0, 0.0, 0.0))
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        try:
+            bpy.ops.object.shade_auto_smooth(angle=math.radians(35))
+        except Exception:
+            bpy.ops.object.shade_smooth()
+        return {"ok": True, "name": obj.name, "type": "MESH"}
+
+    if tool == "create_empty":
+        name = cmd.get("name") or "Empty"
+        display = (cmd.get("display_type") or "PLAIN_AXES").upper()
+        size = float(cmd.get("size") or 1.0)
+        empty = bpy.data.objects.new(name, None)
+        bpy.context.collection.objects.link(empty)
+        empty.empty_display_type = display
+        empty.empty_display_size = size
+        empty.location = tuple(cmd.get("location") or (0.0, 0.0, 0.0))
+        empty.rotation_euler = tuple(cmd.get("rotation") or (0.0, 0.0, 0.0))
+        return {"ok": True, "name": empty.name, "type": "EMPTY"}
+
+    if tool == "set_light_camera_visibility":
+        name = cmd.get("name")
+        obj = bpy.data.objects.get(name) if name else None
+        if obj is None or obj.type != "LIGHT":
+            return {"ok": False, "error": f"No light named {name!r}"}
+        visible = bool(cmd.get("visible", True))
+        obj.visible_camera = visible
+        obj.visible_diffuse = True
+        obj.visible_glossy = True
+        return {"ok": True, "name": obj.name, "visible_camera": visible}
 
     if tool == "create_primitive":
         ptype = (cmd.get("type") or "CUBE").upper()
@@ -1245,6 +1542,83 @@ def _dispatch(cmd: dict) -> dict:
             "name": obj.name,
             "modifier_order": [m.name for m in obj.modifiers],
         }
+
+    if tool == "critique_render":
+        # Fast preview render tuned for image-match critique loops:
+        # EEVEE + low samples + small resolution + current camera.
+        resolution = int(cmd.get("resolution") or 512)
+        samples = int(cmd.get("samples") or 16)
+        scene = bpy.context.scene
+        orig_x = scene.render.resolution_x
+        orig_y = scene.render.resolution_y
+        orig_pct = scene.render.resolution_percentage
+        orig_path = scene.render.filepath
+        orig_format = scene.render.image_settings.file_format
+        orig_engine = scene.render.engine
+        orig_eevee_samples = getattr(scene.eevee, "taa_render_samples", None)
+        tmp_path = None
+        try:
+            fast_engine = None
+            for candidate in ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE"):
+                try:
+                    scene.render.engine = candidate
+                    fast_engine = candidate
+                    break
+                except Exception:
+                    continue
+            if fast_engine and hasattr(scene, "eevee"):
+                try:
+                    scene.eevee.taa_render_samples = max(1, samples)
+                except Exception:
+                    pass
+
+            aspect = (orig_x / orig_y) if orig_y else 1.0
+            if aspect >= 1.0:
+                scene.render.resolution_x = resolution
+                scene.render.resolution_y = max(1, int(round(resolution / aspect)))
+            else:
+                scene.render.resolution_y = resolution
+                scene.render.resolution_x = max(1, int(round(resolution * aspect)))
+            scene.render.resolution_percentage = 100
+            scene.render.image_settings.file_format = "PNG"
+
+            fd, tmp_path = tempfile.mkstemp(prefix="justthreed_critique_", suffix=".png")
+            os.close(fd)
+            scene.render.filepath = tmp_path
+
+            bpy.ops.render.render(write_still=True)
+
+            with open(tmp_path, "rb") as f:
+                data = f.read()
+            return {
+                "ok": True,
+                "format": "png",
+                "width": scene.render.resolution_x,
+                "height": scene.render.resolution_y,
+                "engine": fast_engine or orig_engine,
+                "samples": samples,
+                "data_base64": base64.b64encode(data).decode("ascii"),
+            }
+        finally:
+            scene.render.resolution_x = orig_x
+            scene.render.resolution_y = orig_y
+            scene.render.resolution_percentage = orig_pct
+            scene.render.filepath = orig_path
+            scene.render.image_settings.file_format = orig_format
+            try:
+                scene.render.engine = orig_engine
+            except Exception:
+                pass
+            if orig_eevee_samples is not None:
+                try:
+                    scene.eevee.taa_render_samples = orig_eevee_samples
+                except Exception:
+                    pass
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     if tool == "render_and_show":
         resolution = int(cmd.get("resolution") or 512)
@@ -4117,6 +4491,1470 @@ def _dispatch(cmd: dict) -> dict:
             "imported_objects": new_names,
             "format": ext,
         }
+
+    # ---------- Hard-surface iPhone-style modeling helpers ----------
+
+    if tool == "create_rounded_box":
+        return _safe_rounded_box(
+            name=cmd.get("name") or "RoundedBox",
+            W=float(cmd.get("width") or 0.0),
+            H=float(cmd.get("height") or 0.0),
+            D=float(cmd.get("depth") or 0.0),
+            corner_r=float(cmd.get("corner_radius") or 0.0),
+            edge_bevel=float(cmd.get("edge_bevel") or 0.0),
+            segments=max(1, int(cmd.get("segments") or 16)),
+            location=tuple(cmd.get("location") or (0.0, 0.0, 0.0)),
+        )
+
+    if tool == "create_phone_body":
+        return _safe_rounded_box(
+            name=cmd.get("name") or "PhoneBody",
+            W=float(cmd.get("width") or 7.7),
+            H=float(cmd.get("height") or 16.0),
+            D=float(cmd.get("depth") or 0.83),
+            corner_r=float(cmd.get("corner_radius") or 1.35),
+            edge_bevel=float(cmd.get("rail_bevel") or 0.18),
+            segments=16,
+            location=tuple(cmd.get("location") or (0.0, 0.0, 0.0)),
+        )
+
+    if tool == "fillet_seam":
+        obj_a, err = _resolve_mesh_object(cmd.get("obj_a"))
+        if err:
+            return err
+        obj_b, err = _resolve_mesh_object(cmd.get("obj_b"))
+        if err:
+            return err
+        if obj_a is obj_b:
+            return {"ok": False, "error": "obj_a and obj_b must differ"}
+        plane_axis = (cmd.get("plane_axis") or "Y").upper()
+        if plane_axis not in ("X", "Y", "Z"):
+            return {"ok": False, "error": "plane_axis must be X, Y, or Z"}
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[plane_axis]
+        plane_value = float(cmd.get("plane_value"))
+        radius = float(cmd.get("radius") or 0.0)
+        overlap = float(cmd.get("overlap") or 0.1)
+        segments = max(1, int(cmd.get("segments") or 10))
+        profile = float(cmd.get("profile") or 0.5)
+        consume_b = bool(cmd.get("consume_b", True))
+
+        b_thickness = float(obj_b.dimensions[axis_idx])
+        max_r = max(1e-6, min(b_thickness, overlap + b_thickness) / 3.0)
+        warning = None
+        clamped_r = radius
+        if radius > max_r:
+            clamped_r = max_r
+            warning = f"radius clamped from {radius:.4f} to {max_r:.4f}"
+
+        # Push obj_b toward obj_a along axis by -overlap to ensure interpenetration.
+        delta = [0.0, 0.0, 0.0]
+        delta[axis_idx] = -overlap
+        obj_b.location = (
+            obj_b.location[0] + delta[0],
+            obj_b.location[1] + delta[1],
+            obj_b.location[2] + delta[2],
+        )
+        bpy.context.view_layer.update()
+
+        if obj_a.mode == "EDIT":
+            _select_only(obj_a)
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        mod = obj_a.modifiers.new(name="_jt_seam_bool", type="BOOLEAN")
+        mod.object = obj_b
+        mod.operation = "UNION"
+        try:
+            mod.solver = "EXACT"
+        except (AttributeError, TypeError):
+            pass
+        _select_only(obj_a)
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+        except RuntimeError as exc:
+            if mod.name in obj_a.modifiers:
+                obj_a.modifiers.remove(obj_a.modifiers[mod.name])
+            return {"ok": False, "error": f"seam union failed: {exc}"}
+
+        if consume_b:
+            bpy.data.objects.remove(obj_b, do_unlink=True)
+
+        # Find seam-ring edges using interface-plane face filter.
+        tol = 0.005
+        mw = obj_a.matrix_world
+        bm = bmesh.new()
+        bm.from_mesh(obj_a.data)
+        bm.edges.ensure_lookup_table()
+        bm.faces.ensure_lookup_table()
+
+        def _face_on_plane(f):
+            for v in f.verts:
+                wv = mw @ v.co
+                if abs(wv[axis_idx] - plane_value) > tol:
+                    return False
+            return True
+
+        seam_edges = []
+        for e in bm.edges:
+            if len(e.link_faces) != 2:
+                continue
+            on = [_face_on_plane(f) for f in e.link_faces]
+            if on.count(True) == 1:
+                seam_edges.append(e)
+
+        seam_count = len(seam_edges)
+        if seam_edges:
+            bmesh.ops.bevel(
+                bm,
+                geom=seam_edges,
+                offset=clamped_r,
+                segments=segments,
+                profile=profile,
+                affect="EDGES",
+                clamp_overlap=True,
+            )
+        bm.normal_update()
+        bm.to_mesh(obj_a.data)
+        bm.free()
+        obj_a.data.update()
+
+        _select_only(obj_a)
+        try:
+            bpy.ops.object.shade_auto_smooth(angle=math.radians(55))
+        except Exception:
+            bpy.ops.object.shade_smooth()
+
+        result = {
+            "ok": True,
+            "seam_edge_count": seam_count,
+            "radius_used": clamped_r,
+            "dimensions": [round(v, 6) for v in obj_a.dimensions],
+        }
+        if warning:
+            result["warning"] = warning
+        return result
+
+    if tool == "load_reference_image":
+        path = cmd.get("path")
+        if not path or not isinstance(path, str):
+            return {"ok": False, "error": "'path' is required"}
+        if not os.path.isfile(path):
+            return {"ok": False, "error": f"File not found: {path}"}
+        axis = (cmd.get("axis") or "-Y").upper()
+        opacity = float(cmd.get("opacity") or 0.5)
+        empty_name = cmd.get("empty_name") or "RefImage"
+        rotations = {
+            "-Y": (0.0, 0.0, 0.0),
+            "+Y": (0.0, math.pi, 0.0),
+            "+X": (0.0, math.pi / 2, 0.0),
+            "-X": (0.0, -math.pi / 2, 0.0),
+            "+Z": (-math.pi / 2, 0.0, 0.0),
+            "-Z": (math.pi / 2, 0.0, 0.0),
+        }
+        if axis not in rotations:
+            return {"ok": False, "error": f"axis must be one of {sorted(rotations)}"}
+        try:
+            bpy.ops.object.empty_image_add(filepath=path)
+        except RuntimeError as exc:
+            return {"ok": False, "error": f"empty_image_add failed: {exc}"}
+        obj = bpy.context.active_object
+        if obj is None:
+            return {"ok": False, "error": "Empty image was not created"}
+        obj.name = empty_name
+        obj.empty_display_type = "IMAGE"
+        obj.empty_display_size = 10.0
+        obj.use_empty_image_alpha = True
+        obj.color[3] = opacity
+        obj.rotation_euler = rotations[axis]
+        return {"ok": True, "name": obj.name}
+
+    # ---------- Hard-surface batch 2 ----------
+
+    if tool == "cylinder_cut":
+        target, err = _resolve_mesh_object(cmd.get("target"))
+        if err:
+            return err
+        loc = cmd.get("location") or [0.0, 0.0, 0.0]
+        try:
+            lx, ly, lz = float(loc[0]), float(loc[1]), float(loc[2])
+        except (TypeError, ValueError, IndexError):
+            return {"ok": False, "error": "'location' must be [x, y, z]"}
+        axis = (cmd.get("axis") or "Z").upper()
+        if axis not in ("X", "Y", "Z"):
+            return {"ok": False, "error": "axis must be X, Y, or Z"}
+        radius = float(cmd.get("radius") or 0.0)
+        depth = float(cmd.get("depth") or 0.0)
+        if radius <= 0 or depth <= 0:
+            return {"ok": False, "error": "radius and depth must be > 0"}
+        verts = max(3, int(cmd.get("vertices") or 48))
+        consume = bool(cmd.get("consume_cutter", True))
+        if target.mode == "EDIT":
+            _select_only(target)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        try:
+            bpy.ops.mesh.primitive_cylinder_add(vertices=verts, radius=radius, depth=depth, location=(lx, ly, lz))
+        except RuntimeError as exc:
+            return {"ok": False, "error": f"cylinder add failed: {exc}"}
+        cutter = bpy.context.active_object
+        if cutter is None:
+            return {"ok": False, "error": "cylinder cutter not created"}
+        cutter.name = f"_jt_cyl_cut_{target.name}"
+        if axis == "Y":
+            cutter.rotation_euler = (math.pi / 2.0, 0.0, 0.0)
+        elif axis == "X":
+            cutter.rotation_euler = (0.0, math.pi / 2.0, 0.0)
+        _select_only(cutter)
+        bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+        mod = target.modifiers.new(name="_jt_cyl_bool", type="BOOLEAN")
+        mod.object = cutter
+        mod.operation = "DIFFERENCE"
+        try:
+            mod.solver = "EXACT"
+        except (AttributeError, TypeError):
+            pass
+        _select_only(target)
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+        except RuntimeError as exc:
+            if mod.name in target.modifiers:
+                target.modifiers.remove(target.modifiers[mod.name])
+            bpy.data.objects.remove(cutter, do_unlink=True)
+            return {"ok": False, "error": f"cylinder boolean failed: {exc}"}
+        if consume:
+            bpy.data.objects.remove(cutter, do_unlink=True)
+        return {
+            "ok": True,
+            "target": target.name,
+            "dimensions": [round(v, 6) for v in target.dimensions],
+        }
+
+    if tool == "add_mirror_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        axis_str = (cmd.get("axis") or "X").upper()
+        flags = [c in axis_str for c in "XYZ"]
+        if not any(flags):
+            return {"ok": False, "error": "axis must contain at least one of X/Y/Z"}
+        try:
+            mod = obj.modifiers.new(name="Mirror", type="MIRROR")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Mirror modifier: {exc}"}
+        for i, on in enumerate(flags):
+            mod.use_axis[i] = on
+        mod.use_clip = bool(cmd.get("use_clip", True))
+        try:
+            mod.merge_threshold = float(cmd.get("merge_threshold", 0.001))
+        except (AttributeError, TypeError):
+            pass
+        mirror_obj_name = cmd.get("mirror_object")
+        if mirror_obj_name:
+            mo = bpy.data.objects.get(mirror_obj_name)
+            if mo is None:
+                obj.modifiers.remove(mod)
+                return {"ok": False, "error": f"mirror_object {mirror_obj_name!r} not found"}
+            mod.mirror_object = mo
+        return {"ok": True, "name": obj.name, "modifier": "Mirror"}
+
+    if tool == "apply_mirror":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mod_name = cmd.get("modifier_name") or "Mirror"
+        if mod_name not in obj.modifiers:
+            return {"ok": False, "error": f"No modifier named {mod_name!r} on {obj.name!r}"}
+        _select_only(obj)
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod_name)
+        except RuntimeError as exc:
+            return {"ok": False, "error": f"modifier_apply failed: {exc}"}
+        return {"ok": True}
+
+    if tool == "add_subsurf_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        try:
+            mod = obj.modifiers.new(name="Subsurf", type="SUBSURF")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Subsurf: {exc}"}
+        mod.levels = max(0, int(cmd.get("levels", 2)))
+        mod.render_levels = max(0, int(cmd.get("render_levels", 3)))
+        try:
+            mod.use_limit_surface = bool(cmd.get("use_limit_surface", True))
+        except AttributeError:
+            pass
+        _select_only(obj)
+        try:
+            bpy.ops.object.shade_smooth()
+        except Exception:
+            pass
+        return {"ok": True, "name": obj.name, "modifier": "Subsurf"}
+
+    if tool in ("set_edge_crease", "set_edge_bevel_weight"):
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mode = (cmd.get("edge_selection") or "sharp").lower()
+        value = float(cmd.get("value", 1.0))
+        sharp_angle = float(cmd.get("sharp_angle", 30.0))
+        prev_mode = obj.mode
+        if obj.mode == "EDIT" and mode == "selected":
+            # Capture selected indices from live edit mesh.
+            bm_live = bmesh.from_edit_mesh(obj.data)
+            selected_idx = [e.index for e in bm_live.edges if e.select]
+            bpy.ops.object.mode_set(mode="OBJECT")
+        else:
+            selected_idx = None
+            if obj.mode == "EDIT":
+                _select_only(obj)
+                bpy.ops.object.mode_set(mode="OBJECT")
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        if selected_idx is not None:
+            edges = [bm.edges[i] for i in selected_idx if i < len(bm.edges)]
+        else:
+            edges = _select_edges_by_mode(bm, mode, sharp_angle=sharp_angle)
+        affected = len(edges)
+        layer = _crease_layer(bm) if tool == "set_edge_crease" else _bweight_layer(bm)
+        used_fallback = False
+        if layer is None:
+            used_fallback = True
+        else:
+            try:
+                for e in edges:
+                    e[layer] = value
+            except Exception:
+                used_fallback = True
+        bm.to_mesh(obj.data)
+        bm.free()
+        obj.data.update()
+        if used_fallback and edges:
+            # Fallback via operator on selected edges in edit mode.
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="EDIT")
+            bpy.ops.mesh.select_all(action="DESELECT")
+            bpy.ops.object.mode_set(mode="OBJECT")
+            for e in obj.data.edges:
+                e.select = False
+            edge_ids = set(e.index for e in edges)
+            for e in obj.data.edges:
+                if e.index in edge_ids:
+                    e.select = True
+            bpy.ops.object.mode_set(mode="EDIT")
+            try:
+                if tool == "set_edge_crease":
+                    bpy.ops.transform.edge_crease(value=value)
+                else:
+                    bpy.ops.transform.edge_bevelweight(value=value)
+            except RuntimeError as exc:
+                bpy.ops.object.mode_set(mode="OBJECT")
+                return {"ok": False, "error": f"fallback set failed: {exc}"}
+            bpy.ops.object.mode_set(mode="OBJECT")
+        if obj.mode == "EDIT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        return {"ok": True, "edges_affected": affected}
+
+    if tool == "add_support_loops":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mode = (cmd.get("edge_selection") or "sharp").lower()
+        distance = float(cmd.get("distance", 0.05))
+        sharp_angle = float(cmd.get("sharp_angle", 30.0))
+        if distance <= 0:
+            return {"ok": False, "error": "distance must be > 0"}
+        if obj.mode == "EDIT" and mode != "selected":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        edges = _select_edges_by_mode(bm, mode, sharp_angle=sharp_angle)
+        affected = len(edges)
+        if not edges:
+            bm.free()
+            return {"ok": True, "edges_affected": 0}
+        try:
+            bmesh.ops.bevel(
+                bm,
+                geom=edges,
+                offset=distance,
+                segments=2,
+                profile=1.0,
+                affect="EDGES",
+                clamp_overlap=True,
+            )
+        except (RuntimeError, ValueError) as exc:
+            bm.free()
+            return {"ok": False, "error": f"support-loop bevel failed: {exc}"}
+        bm.normal_update()
+        bm.to_mesh(obj.data)
+        bm.free()
+        obj.data.update()
+        return {"ok": True, "edges_affected": affected}
+
+    if tool == "select_by":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mode = (cmd.get("mode") or "").lower()
+        if mode not in ("boundary", "non_manifold", "sharp", "by_normal", "by_plane"):
+            return {"ok": False, "error": f"unknown mode {mode!r}"}
+        if obj.mode == "EDIT":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        _select_only(obj)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        count = 0
+        try:
+            if mode in ("boundary", "non_manifold"):
+                bpy.ops.mesh.select_mode(type="EDGE")
+                try:
+                    if mode == "boundary":
+                        bpy.ops.mesh.select_non_manifold(
+                            extend=False, use_wire=False, use_boundary=True,
+                            use_multi_face=False, use_non_contiguous=False, use_verts=False,
+                        )
+                    else:
+                        bpy.ops.mesh.select_non_manifold(extend=False)
+                except RuntimeError as exc:
+                    bpy.ops.object.mode_set(mode="OBJECT")
+                    return {"ok": False, "error": f"select_non_manifold failed: {exc}"}
+                bm_live = bmesh.from_edit_mesh(obj.data)
+                count = sum(1 for e in bm_live.edges if e.select)
+            elif mode == "sharp":
+                bpy.ops.mesh.select_mode(type="EDGE")
+                bm_live = bmesh.from_edit_mesh(obj.data)
+                edges = _select_edges_by_mode(bm_live, "sharp", sharp_angle=float(cmd.get("sharp_angle", 30.0)))
+                for e in edges:
+                    e.select_set(True)
+                bmesh.update_edit_mesh(obj.data)
+                count = len(edges)
+            elif mode == "by_normal":
+                bpy.ops.mesh.select_mode(type="FACE")
+                bm_live = bmesh.from_edit_mesh(obj.data)
+                faces = _select_faces_by_normal(bm_live, cmd.get("normal") or [0, 0, 1], float(cmd.get("tolerance", 0.1)))
+                for f in faces:
+                    f.select_set(True)
+                bmesh.update_edit_mesh(obj.data)
+                count = len(faces)
+            elif mode == "by_plane":
+                bpy.ops.mesh.select_mode(type="EDGE")
+                bm_live = bmesh.from_edit_mesh(obj.data)
+                edges = _select_edges_by_mode(
+                    bm_live, "by_plane",
+                    plane_axis=cmd.get("axis"),
+                    plane_value=float(cmd.get("value", 0.0)),
+                    tol=float(cmd.get("tolerance", 0.005)),
+                    matrix=obj.matrix_world,
+                )
+                for e in edges:
+                    e.select_set(True)
+                bmesh.update_edit_mesh(obj.data)
+                count = len(edges)
+        finally:
+            if obj.mode == "EDIT":
+                bpy.ops.object.mode_set(mode="OBJECT")
+        return {"ok": True, "count": count, "mode": mode}
+
+    if tool == "surface_blend_loops":
+        obj_a, err = _resolve_mesh_object(cmd.get("obj_a"))
+        if err:
+            return err
+        obj_b, err = _resolve_mesh_object(cmd.get("obj_b"))
+        if err:
+            return err
+        if obj_a is obj_b:
+            return {"ok": False, "error": "obj_a and obj_b must differ"}
+        sel_a = cmd.get("loop_a_selector") or {}
+        sel_b = cmd.get("loop_b_selector") or {}
+        segments = max(1, int(cmd.get("segments", 8)))
+        profile = float(cmd.get("profile", 0.5))
+        consume_b = bool(cmd.get("consume_b", True))
+
+        def _collect_loop(obj, sel):
+            mode = (sel.get("mode") or "").lower()
+            bm = bmesh.new()
+            bm.from_mesh(obj.data)
+            if mode == "by_plane":
+                edges = _select_edges_by_mode(
+                    bm, "by_plane",
+                    plane_axis=sel.get("axis"),
+                    plane_value=float(sel.get("value", 0.0)),
+                    tol=float(sel.get("tolerance", 0.005)),
+                    matrix=obj.matrix_world,
+                )
+            elif mode in ("boundary", "non_manifold", "sharp", "all"):
+                edges = _select_edges_by_mode(bm, mode, sharp_angle=float(sel.get("sharp_angle", 30.0)))
+            else:
+                edges = []
+            verts = set()
+            for e in edges:
+                verts.add(e.verts[0].index)
+                verts.add(e.verts[1].index)
+            bm.free()
+            return verts
+
+        verts_a = _collect_loop(obj_a, sel_a)
+        verts_b = _collect_loop(obj_b, sel_b)
+        if not verts_a or not verts_b:
+            return {"ok": False, "error": "could not resolve one or both loops"}
+
+        # Pre-join vert counts so we can offset b's indices after join.
+        a_vcount = len(obj_a.data.vertices)
+        if obj_a.mode == "EDIT":
+            _select_only(obj_a)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        if obj_b.mode == "EDIT":
+            _select_only(obj_b)
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        # Join b into a.
+        bpy.ops.object.select_all(action="DESELECT")
+        obj_a.select_set(True)
+        obj_b.select_set(True)
+        bpy.context.view_layer.objects.active = obj_a
+        try:
+            bpy.ops.object.join()
+        except RuntimeError as exc:
+            return {"ok": False, "error": f"join failed: {exc}"}
+
+        # b's verts now live at index + a_vcount (Blender appends).
+        target_indices = set(verts_a) | set(i + a_vcount for i in verts_b)
+
+        _select_only(obj_a)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_mode(type="EDGE")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        bm_live = bmesh.from_edit_mesh(obj_a.data)
+        bm_live.edges.ensure_lookup_table()
+        bm_live.verts.ensure_lookup_table()
+        bridged = 0
+        for e in bm_live.edges:
+            if e.verts[0].index in target_indices and e.verts[1].index in target_indices:
+                e.select_set(True)
+                bridged += 1
+        bmesh.update_edit_mesh(obj_a.data)
+        try:
+            bpy.ops.mesh.bridge_edge_loops(number_cuts=max(0, segments - 1), smoothness=profile)
+        except RuntimeError as exc:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": False, "error": f"bridge_edge_loops failed: {exc}"}
+        bpy.ops.object.mode_set(mode="OBJECT")
+        try:
+            bpy.ops.object.shade_smooth()
+        except Exception:
+            pass
+        # consume_b: b is already merged via join; flag retained for API symmetry.
+        _ = consume_b
+        return {"ok": True, "bridged_edges": bridged}
+
+    if tool == "add_array_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        try:
+            mod = obj.modifiers.new(name="Array", type="ARRAY")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Array: {exc}"}
+        mod.count = max(1, int(cmd.get("count", 3)))
+        rel = cmd.get("relative_offset") or [1.0, 0.0, 0.0]
+        const = cmd.get("constant_offset") or [0.0, 0.0, 0.0]
+        try:
+            mod.use_relative_offset = True
+            for i in range(3):
+                mod.relative_offset_displace[i] = float(rel[i])
+            use_const = bool(cmd.get("use_constant", False))
+            mod.use_constant_offset = use_const
+            for i in range(3):
+                mod.constant_offset_displace[i] = float(const[i])
+        except (AttributeError, IndexError, TypeError) as exc:
+            obj.modifiers.remove(mod)
+            return {"ok": False, "error": f"array param error: {exc}"}
+        return {"ok": True, "name": obj.name, "modifier": "Array"}
+
+    if tool == "solidify":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        thickness = float(cmd.get("thickness", 0.0))
+        if thickness == 0:
+            return {"ok": False, "error": "thickness must be non-zero"}
+        try:
+            mod = obj.modifiers.new(name="Solidify", type="SOLIDIFY")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Solidify: {exc}"}
+        mod.thickness = thickness
+        mod.offset = float(cmd.get("offset", -1.0))
+        try:
+            mod.use_even_offset = bool(cmd.get("even_thickness", True))
+        except AttributeError:
+            pass
+        if bool(cmd.get("apply", False)):
+            _select_only(obj)
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            except RuntimeError as exc:
+                if mod.name in obj.modifiers:
+                    obj.modifiers.remove(obj.modifiers[mod.name])
+                return {"ok": False, "error": f"solidify apply failed: {exc}"}
+        return {"ok": True, "name": obj.name}
+
+    if tool == "inset_and_extrude":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        face_sel = (cmd.get("face_selection") or "selected").lower()
+        inset = float(cmd.get("inset", 0.0))
+        extrude = float(cmd.get("extrude", 0.0))
+        normal_in = cmd.get("normal")
+
+        # Resolve the implied normal vector for extrude direction & selection.
+        named = _named_axis_normal(face_sel)
+        if face_sel == "by_normal":
+            if not normal_in:
+                return {"ok": False, "error": "by_normal requires 'normal'"}
+            n_vec = Vector(normal_in)
+        elif named is not None:
+            n_vec = named
+        else:
+            # selected: use average of selected face normals (computed below) — fallback to +Z.
+            n_vec = Vector((0.0, 0.0, 1.0))
+        if n_vec.length == 0:
+            return {"ok": False, "error": "normal vector is zero"}
+        n_unit = n_vec.normalized()
+
+        # Capture pre-existing selection if mode == "selected".
+        selected_face_indices = None
+        if face_sel == "selected" and obj.mode == "EDIT":
+            bm_live = bmesh.from_edit_mesh(obj.data)
+            selected_face_indices = [f.index for f in bm_live.faces if f.select]
+            bpy.ops.object.mode_set(mode="OBJECT")
+        elif obj.mode == "EDIT":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        _select_only(obj)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_mode(type="FACE")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        bm_live = bmesh.from_edit_mesh(obj.data)
+        bm_live.faces.ensure_lookup_table()
+        affected = 0
+        if face_sel == "selected":
+            if selected_face_indices:
+                for i in selected_face_indices:
+                    if i < len(bm_live.faces):
+                        bm_live.faces[i].select_set(True)
+                        affected += 1
+        elif face_sel == "by_normal" or named is not None:
+            faces = _select_faces_by_normal(bm_live, n_unit, float(cmd.get("tolerance", 0.1)))
+            for f in faces:
+                f.select_set(True)
+            affected = len(faces)
+            # For "selected"-fallback recompute n_unit from average normal.
+        else:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": False, "error": f"unknown face_selection {face_sel!r}"}
+        bmesh.update_edit_mesh(obj.data)
+        if affected == 0:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": True, "faces_affected": 0}
+        try:
+            if inset != 0.0:
+                bpy.ops.mesh.inset(thickness=inset)
+            move_vec = (n_unit * extrude)
+            bpy.ops.mesh.extrude_region_move(
+                TRANSFORM_OT_translate={"value": (move_vec.x, move_vec.y, move_vec.z)}
+            )
+        except RuntimeError as exc:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": False, "error": f"inset/extrude failed: {exc}"}
+        bpy.ops.object.mode_set(mode="OBJECT")
+        return {"ok": True, "faces_affected": affected}
+
+    if tool == "dimensions_of":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mw = obj.matrix_world
+        corners = [mw @ Vector(c) for c in obj.bound_box]
+        xs = [v.x for v in corners]; ys = [v.y for v in corners]; zs = [v.z for v in corners]
+        bbox_min = [min(xs), min(ys), min(zs)]
+        bbox_max = [max(xs), max(ys), max(zs)]
+        return {
+            "ok": True,
+            "dimensions": [round(v, 6) for v in obj.dimensions],
+            "bbox_min": [round(v, 6) for v in bbox_min],
+            "bbox_max": [round(v, 6) for v in bbox_max],
+            "location": [round(v, 6) for v in obj.location],
+        }
+
+    if tool == "distance_between":
+        a = bpy.data.objects.get(cmd.get("a"))
+        b = bpy.data.objects.get(cmd.get("b"))
+        if a is None or b is None:
+            return {"ok": False, "error": "both 'a' and 'b' must name existing objects"}
+        la = a.matrix_world.translation
+        lb = b.matrix_world.translation
+        delta = (lb - la)
+        return {
+            "ok": True,
+            "distance": round(delta.length, 6),
+            "delta": [round(delta.x, 6), round(delta.y, 6), round(delta.z, 6)],
+        }
+
+    # ---------- Batch 3: hard-surface atomic ops + composites ----------
+
+    if tool == "add_bevel_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        try:
+            mod = obj.modifiers.new(name="Bevel", type="BEVEL")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Bevel: {exc}"}
+        try:
+            mod.width = float(cmd.get("width", 0.02))
+            mod.segments = max(1, int(cmd.get("segments", 3)))
+            mod.profile = float(cmd.get("profile", 0.5))
+            lm = (cmd.get("limit_method") or "ANGLE").upper()
+            if lm not in ("ANGLE", "WEIGHT", "NONE", "VGROUP"):
+                lm = "ANGLE"
+            mod.limit_method = lm
+            if lm == "ANGLE":
+                mod.angle_limit = math.radians(float(cmd.get("angle_degrees", 30.0)))
+            try:
+                mod.use_clamp_overlap = bool(cmd.get("clamp_overlap", False))
+            except AttributeError:
+                pass
+            try:
+                mod.harden_normals = bool(cmd.get("harden_normals", True))
+            except AttributeError:
+                pass
+            try:
+                mod.loop_slide = bool(cmd.get("loop_slide", True))
+            except AttributeError:
+                pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            obj.modifiers.remove(mod)
+            return {"ok": False, "error": f"bevel param error: {exc}"}
+        return {"ok": True, "name": obj.name, "modifier": mod.name}
+
+    if tool == "add_weighted_normals_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        try:
+            mod = obj.modifiers.new(name="WeightedNormal", type="WEIGHTED_NORMAL")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create WeightedNormal: {exc}"}
+        try:
+            mod.weight = max(1, int(cmd.get("weight", 50)))
+            mod.keep_sharp = bool(cmd.get("keep_sharp", True))
+            mod.face_influence = bool(cmd.get("face_influence", False))
+        except (AttributeError, TypeError) as exc:
+            pass
+        # Ensure smooth-shaded so the weighted-normal effect is visible.
+        _select_only(obj)
+        try:
+            bpy.ops.object.shade_smooth()
+        except Exception:
+            pass
+        return {"ok": True, "name": obj.name, "modifier": mod.name}
+
+    if tool == "add_boolean_modifier":
+        target, err = _resolve_mesh_object(cmd.get("target"))
+        if err:
+            return err
+        cutter = bpy.data.objects.get(cmd.get("cutter"))
+        if cutter is None:
+            return {"ok": False, "error": f"cutter {cmd.get('cutter')!r} not found"}
+        op = (cmd.get("operation") or "DIFFERENCE").upper()
+        if op not in ("DIFFERENCE", "UNION", "INTERSECT"):
+            return {"ok": False, "error": f"operation must be DIFFERENCE/UNION/INTERSECT"}
+        try:
+            mod = target.modifiers.new(name="Boolean", type="BOOLEAN")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Boolean: {exc}"}
+        mod.object = cutter
+        mod.operation = op
+        try:
+            mod.solver = (cmd.get("solver") or "EXACT").upper()
+        except (AttributeError, TypeError):
+            pass
+        if bool(cmd.get("hide_cutter", True)):
+            try:
+                cutter.hide_viewport = True
+                cutter.hide_render = True
+            except AttributeError:
+                pass
+        applied = False
+        if bool(cmd.get("apply", False)):
+            _select_only(target)
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+                applied = True
+            except RuntimeError as exc:
+                if mod.name in target.modifiers:
+                    target.modifiers.remove(target.modifiers[mod.name])
+                return {"ok": False, "error": f"boolean apply failed: {exc}"}
+        return {"ok": True, "target": target.name, "applied": applied}
+
+    if tool == "set_auto_smooth":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        angle = float(cmd.get("angle_degrees", 30.0))
+        _select_only(obj)
+        try:
+            bpy.ops.object.shade_smooth()
+        except Exception:
+            pass
+        # Blender 4.0 path: mesh.use_auto_smooth + auto_smooth_angle
+        mesh = obj.data
+        legacy_ok = False
+        try:
+            if hasattr(mesh, "use_auto_smooth"):
+                mesh.use_auto_smooth = True
+                mesh.auto_smooth_angle = math.radians(angle)
+                legacy_ok = True
+        except (AttributeError, TypeError):
+            pass
+        # Blender 4.1+ path: shade_smooth_by_angle operator adds a modifier.
+        if not legacy_ok:
+            try:
+                bpy.ops.object.shade_smooth_by_angle(angle=math.radians(angle))
+            except (AttributeError, RuntimeError, TypeError):
+                # Fallback: add a Smooth-by-Angle geonode group if we must.
+                try:
+                    bpy.ops.object.modifier_add_node_group(
+                        asset_library_type='ESSENTIALS',
+                        asset_library_identifier="",
+                        relative_asset_identifier="geometry_nodes/smooth_by_angle.blend/NodeTree/Smooth by Angle",
+                    )
+                except Exception:
+                    pass
+        return {"ok": True, "name": obj.name, "angle_degrees": angle}
+
+    if tool == "merge_by_distance":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        dist = float(cmd.get("distance", 0.0001))
+        if obj.mode == "EDIT":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        before = len(obj.data.vertices)
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        try:
+            bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=dist)
+        except (RuntimeError, ValueError) as exc:
+            bm.free()
+            return {"ok": False, "error": f"merge failed: {exc}"}
+        bm.to_mesh(obj.data)
+        bm.free()
+        obj.data.update()
+        after = len(obj.data.vertices)
+        return {"ok": True, "removed": before - after, "remaining": after}
+
+    if tool == "limited_dissolve":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        angle = math.radians(float(cmd.get("angle_degrees", 5.0)))
+        if obj.mode == "EDIT":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        try:
+            bmesh.ops.dissolve_limit(bm, angle_limit=angle, verts=list(bm.verts), edges=list(bm.edges))
+        except (RuntimeError, ValueError) as exc:
+            bm.free()
+            return {"ok": False, "error": f"dissolve failed: {exc}"}
+        bm.to_mesh(obj.data)
+        bm.free()
+        obj.data.update()
+        return {"ok": True, "vertices": len(obj.data.vertices)}
+
+    if tool == "loop_cut":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        edge_idx = int(cmd.get("edge_index", 0))
+        cuts = max(1, int(cmd.get("cuts", 1)))
+        factor = float(cmd.get("factor", 0.0))
+        if obj.mode == "EDIT":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.edges.ensure_lookup_table()
+        if edge_idx < 0 or edge_idx >= len(bm.edges):
+            bm.free()
+            return {"ok": False, "error": f"edge_index {edge_idx} out of range (0..{len(bm.edges)-1})"}
+        edge = bm.edges[edge_idx]
+        try:
+            result = bmesh.ops.subdivide_edgering(bm, edges=[edge], cuts=cuts)
+        except (RuntimeError, ValueError):
+            # Fallback: subdivide the single edge.
+            try:
+                bmesh.ops.subdivide_edges(bm, edges=[edge], cuts=cuts, use_grid_fill=True)
+            except (RuntimeError, ValueError) as exc:
+                bm.free()
+                return {"ok": False, "error": f"loop_cut failed: {exc}"}
+        bm.to_mesh(obj.data)
+        bm.free()
+        obj.data.update()
+        _ = factor  # factor honored only through edit-mode operator; skipped for bmesh path
+        return {"ok": True, "cuts": cuts}
+
+    if tool == "knife_project":
+        target, err = _resolve_mesh_object(cmd.get("target"))
+        if err:
+            return err
+        cutter = bpy.data.objects.get(cmd.get("cutter"))
+        if cutter is None:
+            return {"ok": False, "error": f"cutter {cmd.get('cutter')!r} not found"}
+        cut_through = bool(cmd.get("cut_through", True))
+        # knife_project requires a 3D viewport context; try operator with override.
+        _select_only(target)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        # Cutter must be selected but NOT the active object in object-mode then ctx switches.
+        # Scripted knife_project is notoriously fragile; we try, else report limitation.
+        try:
+            cutter.select_set(True)
+            bpy.context.view_layer.objects.active = target
+            bpy.ops.mesh.knife_project(cut_through=cut_through)
+        except (RuntimeError, TypeError) as exc:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {
+                "ok": False,
+                "error": f"knife_project requires a 3D viewport context and typically fails headless: {exc}. "
+                         "Use add_boolean_modifier with a thin cutter as a scriptable alternative.",
+            }
+        bpy.ops.object.mode_set(mode="OBJECT")
+        return {"ok": True, "target": target.name}
+
+    if tool == "symmetrize":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        direction = (cmd.get("direction") or "POSITIVE_X").upper()
+        valid = {"POSITIVE_X", "NEGATIVE_X", "POSITIVE_Y", "NEGATIVE_Y", "POSITIVE_Z", "NEGATIVE_Z"}
+        if direction not in valid:
+            return {"ok": False, "error": f"direction must be one of {sorted(valid)}"}
+        threshold = float(cmd.get("threshold", 0.0001))
+        _select_only(obj)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        try:
+            bpy.ops.mesh.symmetrize(direction=direction, threshold=threshold)
+        except RuntimeError as exc:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": False, "error": f"symmetrize failed: {exc}"}
+        bpy.ops.object.mode_set(mode="OBJECT")
+        return {"ok": True, "direction": direction}
+
+    if tool == "triangulate":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        try:
+            mod = obj.modifiers.new(name="Triangulate", type="TRIANGULATE")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Triangulate: {exc}"}
+        try:
+            mod.min_vertices = max(4, int(cmd.get("min_vertices", 4)))
+        except (AttributeError, TypeError):
+            pass
+        if bool(cmd.get("apply", False)):
+            _select_only(obj)
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            except RuntimeError as exc:
+                if mod.name in obj.modifiers:
+                    obj.modifiers.remove(obj.modifiers[mod.name])
+                return {"ok": False, "error": f"triangulate apply failed: {exc}"}
+        return {"ok": True, "name": obj.name}
+
+    if tool == "add_decimate_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mode = (cmd.get("mode") or "COLLAPSE").upper()
+        if mode not in ("COLLAPSE", "UNSUBDIV", "DISSOLVE"):
+            return {"ok": False, "error": "mode must be COLLAPSE/UNSUBDIV/DISSOLVE"}
+        try:
+            mod = obj.modifiers.new(name="Decimate", type="DECIMATE")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Decimate: {exc}"}
+        try:
+            mod.decimate_type = "COLLAPSE" if mode == "COLLAPSE" else ("UNSUBDIV" if mode == "UNSUBDIV" else "DISSOLVE")
+            if mode == "COLLAPSE":
+                mod.ratio = max(0.0, min(1.0, float(cmd.get("ratio", 0.5))))
+            elif mode == "DISSOLVE":
+                mod.angle_limit = math.radians(float(cmd.get("angle_degrees", 5.0)))
+        except (AttributeError, TypeError, ValueError) as exc:
+            obj.modifiers.remove(mod)
+            return {"ok": False, "error": f"decimate param error: {exc}"}
+        return {"ok": True, "name": obj.name, "modifier": mod.name}
+
+    if tool == "remesh_modifier":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        mode = (cmd.get("mode") or "VOXEL").upper()
+        if mode not in ("VOXEL", "SHARP", "SMOOTH", "BLOCKS"):
+            return {"ok": False, "error": "mode must be VOXEL/SHARP/SMOOTH/BLOCKS"}
+        try:
+            mod = obj.modifiers.new(name="Remesh", type="REMESH")
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"could not create Remesh: {exc}"}
+        try:
+            mod.mode = mode
+            if mode == "VOXEL":
+                mod.voxel_size = max(0.0001, float(cmd.get("voxel_size", 0.02)))
+            else:
+                mod.octree_depth = max(1, int(cmd.get("octree_depth", 6)))
+        except (AttributeError, TypeError, ValueError) as exc:
+            obj.modifiers.remove(mod)
+            return {"ok": False, "error": f"remesh param error: {exc}"}
+        if bool(cmd.get("apply", False)):
+            _select_only(obj)
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            except RuntimeError as exc:
+                if mod.name in obj.modifiers:
+                    obj.modifiers.remove(obj.modifiers[mod.name])
+                return {"ok": False, "error": f"remesh apply failed: {exc}"}
+        return {"ok": True, "name": obj.name}
+
+    if tool == "make_planar":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        _select_only(obj)
+        prev_mode = obj.mode
+        bpy.ops.object.mode_set(mode="EDIT")
+        # If nothing selected, select all.
+        bm_live = bmesh.from_edit_mesh(obj.data)
+        if not any(f.select for f in bm_live.faces):
+            bpy.ops.mesh.select_all(action="SELECT")
+        try:
+            bpy.ops.mesh.face_make_planar()
+        except RuntimeError as exc:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": False, "error": f"make_planar failed: {exc}"}
+        bpy.ops.object.mode_set(mode="OBJECT")
+        return {"ok": True}
+
+    # ---------- Composite workflows ----------
+
+    if tool == "hard_edge_weighted_normals":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        bw = float(cmd.get("bevel_width", 0.005))
+        bs = max(1, int(cmd.get("bevel_segments", 1)))
+        ang = float(cmd.get("angle_degrees", 30.0))
+        _select_only(obj)
+        try:
+            bpy.ops.object.shade_smooth()
+        except Exception:
+            pass
+        try:
+            bevel = obj.modifiers.new(name="Bevel", type="BEVEL")
+            bevel.width = bw
+            bevel.segments = bs
+            bevel.limit_method = "ANGLE"
+            bevel.angle_limit = math.radians(ang)
+            try:
+                bevel.harden_normals = True
+                bevel.use_clamp_overlap = False
+            except AttributeError:
+                pass
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"bevel add failed: {exc}"}
+        try:
+            wn = obj.modifiers.new(name="WeightedNormal", type="WEIGHTED_NORMAL")
+            wn.weight = 50
+            wn.keep_sharp = True
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"weighted-normal add failed: {exc}"}
+        return {"ok": True, "name": obj.name, "modifiers": ["Bevel", "WeightedNormal"]}
+
+    if tool == "boolean_with_cleanup":
+        target, err = _resolve_mesh_object(cmd.get("target"))
+        if err:
+            return err
+        cutter = bpy.data.objects.get(cmd.get("cutter"))
+        if cutter is None:
+            return {"ok": False, "error": f"cutter {cmd.get('cutter')!r} not found"}
+        op = (cmd.get("operation") or "DIFFERENCE").upper()
+        sld = float(cmd.get("support_loop_distance", 0.01))
+        add_wn = bool(cmd.get("add_weighted_normals", True))
+        consume = bool(cmd.get("consume_cutter", True))
+        # 1. Boolean
+        try:
+            mod = target.modifiers.new(name="_jt_bool", type="BOOLEAN")
+            mod.object = cutter
+            mod.operation = op
+            try:
+                mod.solver = "EXACT"
+            except (AttributeError, TypeError):
+                pass
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"boolean add failed: {exc}"}
+        _select_only(target)
+        try:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+        except RuntimeError as exc:
+            if mod.name in target.modifiers:
+                target.modifiers.remove(target.modifiers[mod.name])
+            return {"ok": False, "error": f"boolean apply failed: {exc}"}
+        # 2. Merge doubles
+        bm = bmesh.new()
+        bm.from_mesh(target.data)
+        try:
+            bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=0.0001)
+        except Exception:
+            pass
+        # 3. Limited dissolve
+        try:
+            bmesh.ops.dissolve_limit(bm, angle_limit=math.radians(2.0), verts=list(bm.verts), edges=list(bm.edges))
+        except Exception:
+            pass
+        # 4. Support loops on sharp edges
+        edges = _select_edges_by_mode(bm, "sharp", sharp_angle=30.0)
+        if edges and sld > 0:
+            try:
+                bmesh.ops.bevel(bm, geom=edges, offset=sld, segments=2, profile=1.0, affect="EDGES", clamp_overlap=True)
+            except Exception:
+                pass
+        bm.to_mesh(target.data)
+        bm.free()
+        target.data.update()
+        # 5. Weighted normals (flat-surface helper)
+        if add_wn:
+            try:
+                wn = target.modifiers.new(name="WeightedNormal", type="WEIGHTED_NORMAL")
+                wn.weight = 50
+                wn.keep_sharp = True
+            except (TypeError, RuntimeError):
+                pass
+        if consume:
+            try:
+                bpy.data.objects.remove(cutter, do_unlink=True)
+            except Exception:
+                pass
+        return {"ok": True, "target": target.name}
+
+    if tool == "panel_cut":
+        obj, err = _resolve_mesh_object(cmd.get("name"))
+        if err:
+            return err
+        face_sel = (cmd.get("face_selection") or "top").lower()
+        inset = float(cmd.get("inset", 0.02))
+        depth = float(cmd.get("depth", -0.005))
+        bevel_inner = float(cmd.get("bevel_inner", 0.001))
+        named = _named_axis_normal(face_sel)
+        if named is None and face_sel != "selected":
+            return {"ok": False, "error": f"unknown face_selection {face_sel!r}"}
+        # Capture pre-selected if needed.
+        selected_idx = None
+        if face_sel == "selected" and obj.mode == "EDIT":
+            bm_live = bmesh.from_edit_mesh(obj.data)
+            selected_idx = [f.index for f in bm_live.faces if f.select]
+            bpy.ops.object.mode_set(mode="OBJECT")
+        elif obj.mode == "EDIT":
+            _select_only(obj)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        _select_only(obj)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_mode(type="FACE")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        bm_live = bmesh.from_edit_mesh(obj.data)
+        bm_live.faces.ensure_lookup_table()
+        affected = 0
+        if face_sel == "selected" and selected_idx:
+            for i in selected_idx:
+                if i < len(bm_live.faces):
+                    bm_live.faces[i].select_set(True)
+                    affected += 1
+            n_unit = Vector((0.0, 0.0, 1.0))
+        else:
+            n_unit = named if named is not None else Vector((0.0, 0.0, 1.0))
+            faces = _select_faces_by_normal(bm_live, n_unit, 0.1)
+            for f in faces:
+                f.select_set(True)
+            affected = len(faces)
+        bmesh.update_edit_mesh(obj.data)
+        if affected == 0:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": True, "faces_affected": 0}
+        try:
+            if inset > 0:
+                bpy.ops.mesh.inset(thickness=inset)
+            move_vec = n_unit.normalized() * depth
+            bpy.ops.mesh.extrude_region_move(
+                TRANSFORM_OT_translate={"value": (move_vec.x, move_vec.y, move_vec.z)}
+            )
+        except RuntimeError as exc:
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return {"ok": False, "error": f"inset/extrude failed: {exc}"}
+        bpy.ops.object.mode_set(mode="OBJECT")
+        # Inner bevel via modifier on all edges weighted
+        if bevel_inner > 0:
+            try:
+                bev = obj.modifiers.new(name="PanelBevel", type="BEVEL")
+                bev.width = bevel_inner
+                bev.segments = 2
+                bev.limit_method = "ANGLE"
+                bev.angle_limit = math.radians(20.0)
+            except (TypeError, RuntimeError):
+                pass
+        return {"ok": True, "faces_affected": affected}
+
+    if tool == "dice_boolean":
+        target, err = _resolve_mesh_object(cmd.get("target"))
+        if err:
+            return err
+        cutter = bpy.data.objects.get(cmd.get("cutter"))
+        if cutter is None or cutter.type != "MESH":
+            return {"ok": False, "error": f"cutter {cmd.get('cutter')!r} not found or not a mesh"}
+        loop_cuts = max(1, int(cmd.get("loop_cuts", 8)))
+        op = (cmd.get("operation") or "DIFFERENCE").upper()
+        apply = bool(cmd.get("apply", True))
+        consume = bool(cmd.get("consume_cutter", True))
+        # Add loop cuts through cutter via bmesh subdivide on all its edges.
+        bm = bmesh.new()
+        bm.from_mesh(cutter.data)
+        try:
+            bmesh.ops.subdivide_edges(
+                bm, edges=list(bm.edges), cuts=loop_cuts, use_grid_fill=True,
+            )
+        except (RuntimeError, ValueError) as exc:
+            bm.free()
+            return {"ok": False, "error": f"dicing failed: {exc}"}
+        bm.to_mesh(cutter.data)
+        bm.free()
+        cutter.data.update()
+        # Now boolean
+        try:
+            mod = target.modifiers.new(name="_jt_dice_bool", type="BOOLEAN")
+            mod.object = cutter
+            mod.operation = op
+            try:
+                mod.solver = "EXACT"
+            except (AttributeError, TypeError):
+                pass
+        except (TypeError, RuntimeError) as exc:
+            return {"ok": False, "error": f"boolean create failed: {exc}"}
+        if apply:
+            _select_only(target)
+            try:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            except RuntimeError as exc:
+                if mod.name in target.modifiers:
+                    target.modifiers.remove(target.modifiers[mod.name])
+                return {"ok": False, "error": f"dice apply failed: {exc}"}
+            if consume:
+                try:
+                    bpy.data.objects.remove(cutter, do_unlink=True)
+                except Exception:
+                    pass
+        return {"ok": True, "target": target.name, "loop_cuts": loop_cuts}
+
+    if tool == "screw_hole":
+        target, err = _resolve_mesh_object(cmd.get("target"))
+        if err:
+            return err
+        loc = cmd.get("location") or [0.0, 0.0, 0.0]
+        try:
+            lx, ly, lz = float(loc[0]), float(loc[1]), float(loc[2])
+        except (TypeError, ValueError, IndexError):
+            return {"ok": False, "error": "location must be [x,y,z]"}
+        radius = float(cmd.get("radius", 0.005))
+        depth = float(cmd.get("depth", 0.01))
+        cs_r = float(cmd.get("countersink_radius", 0.008))
+        cs_d = float(cmd.get("countersink_depth", 0.002))
+        axis = (cmd.get("axis") or "Z").upper()
+        if axis not in ("X", "Y", "Z"):
+            return {"ok": False, "error": "axis must be X/Y/Z"}
+        if target.mode == "EDIT":
+            _select_only(target)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        created = []
+        try:
+            # Deep narrow hole
+            bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=radius, depth=depth, location=(lx, ly, lz))
+            deep = bpy.context.active_object
+            deep.name = f"_jt_screw_deep_{target.name}"
+            created.append(deep)
+            # Shallow wide countersink (placed slightly above surface)
+            bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=cs_r, depth=cs_d, location=(lx, ly, lz))
+            wide = bpy.context.active_object
+            wide.name = f"_jt_screw_csink_{target.name}"
+            created.append(wide)
+            if axis == "Y":
+                deep.rotation_euler = (math.pi / 2.0, 0.0, 0.0)
+                wide.rotation_euler = (math.pi / 2.0, 0.0, 0.0)
+            elif axis == "X":
+                deep.rotation_euler = (0.0, math.pi / 2.0, 0.0)
+                wide.rotation_euler = (0.0, math.pi / 2.0, 0.0)
+            for c in created:
+                _select_only(c)
+                bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+            for c in created:
+                m = target.modifiers.new(name=f"_jt_bool_{c.name}", type="BOOLEAN")
+                m.object = c
+                m.operation = "DIFFERENCE"
+                try:
+                    m.solver = "EXACT"
+                except (AttributeError, TypeError):
+                    pass
+                _select_only(target)
+                try:
+                    bpy.ops.object.modifier_apply(modifier=m.name)
+                except RuntimeError as exc:
+                    if m.name in target.modifiers:
+                        target.modifiers.remove(target.modifiers[m.name])
+                    raise exc
+        except RuntimeError as exc:
+            for c in created:
+                try:
+                    bpy.data.objects.remove(c, do_unlink=True)
+                except Exception:
+                    pass
+            return {"ok": False, "error": f"screw_hole failed: {exc}"}
+        for c in created:
+            try:
+                bpy.data.objects.remove(c, do_unlink=True)
+            except Exception:
+                pass
+        return {"ok": True, "target": target.name}
+
+    if tool == "create_dispersion_glass_material":
+        name = cmd.get("name") or "DispersionGlass"
+        if bpy.data.materials.get(name):
+            return {"ok": False, "error": f"Material named {name!r} already exists"}
+        base_ior = float(cmd.get("base_ior", 1.45))
+        dispersion = float(cmd.get("dispersion", 0.05))
+        roughness = float(cmd.get("roughness", 0.0))
+        fresnel_ior = float(cmd.get("fresnel_ior", 1.45))
+        glossy_roughness = float(cmd.get("glossy_roughness", 0.1))
+        glossy_mix = float(cmd.get("glossy_mix", 0.5))
+        glass_color = _color4(cmd.get("glass_color"), default=(1.0, 1.0, 1.0, 1.0))
+        glossy_color = _color4(cmd.get("glossy_color"), default=(1.0, 1.0, 1.0, 1.0))
+
+        mat = bpy.data.materials.new(name=name)
+        mat.use_nodes = True
+        mat.use_screen_refraction = True
+        tree = mat.node_tree
+        tree.nodes.clear()
+
+        def _mk(ntype, loc, **params):
+            n = tree.nodes.new(ntype)
+            n.location = loc
+            for k, v in params.items():
+                if k in n.inputs:
+                    n.inputs[k].default_value = v
+            return n
+
+        red = _color4(None, default=(1.0, 0.0, 0.0, 1.0))
+        green = _color4(None, default=(0.0, 1.0, 0.0, 1.0))
+        blue = _color4(None, default=(0.0, 0.0, 1.0, 1.0))
+
+        g_r = _mk("ShaderNodeBsdfGlass", (-600, 300),
+                  Color=red, Roughness=roughness, IOR=base_ior - dispersion)
+        g_g = _mk("ShaderNodeBsdfGlass", (-600, 0),
+                  Color=green, Roughness=roughness, IOR=base_ior)
+        g_b = _mk("ShaderNodeBsdfGlass", (-600, -300),
+                  Color=blue, Roughness=roughness, IOR=base_ior + dispersion)
+
+        add1 = tree.nodes.new("ShaderNodeAddShader"); add1.location = (-300, 150)
+        add2 = tree.nodes.new("ShaderNodeAddShader"); add2.location = (-100, 0)
+
+        glossy = _mk("ShaderNodeBsdfGlossy", (-100, -300),
+                     Color=glossy_color, Roughness=glossy_roughness)
+
+        fresnel = _mk("ShaderNodeFresnel", (-100, 300), IOR=fresnel_ior)
+
+        mix = tree.nodes.new("ShaderNodeMixShader"); mix.location = (200, 0)
+        mix.inputs[0].default_value = glossy_mix
+
+        out = tree.nodes.new("ShaderNodeOutputMaterial"); out.location = (450, 0)
+
+        L = tree.links.new
+        L(g_r.outputs["BSDF"], add1.inputs[0])
+        L(g_g.outputs["BSDF"], add1.inputs[1])
+        L(add1.outputs[0], add2.inputs[0])
+        L(g_b.outputs["BSDF"], add2.inputs[1])
+        L(add2.outputs[0], mix.inputs[1])
+        L(glossy.outputs["BSDF"], mix.inputs[2])
+        L(fresnel.outputs["Fac"], mix.inputs[0])
+        L(mix.outputs[0], out.inputs["Surface"])
+
+        # Glass color tints multiplied by user override if supplied
+        if cmd.get("glass_color") is not None:
+            for g in (g_r, g_g, g_b):
+                g.inputs["Color"].default_value = glass_color
+
+        return {"ok": True, "material": _material_summary(mat)}
+
+    if tool == "enable_cycles_dispersion":
+        mat, err = _resolve_material(cmd.get("material_name"))
+        if err:
+            return err
+        dispersion = float(cmd.get("dispersion", 0.25))
+        if not mat.use_nodes or mat.node_tree is None:
+            return {"ok": False, "error": f"{mat.name!r} has no node tree"}
+        touched = []
+        for node in mat.node_tree.nodes:
+            if node.bl_idname in ("ShaderNodeBsdfGlass", "ShaderNodeBsdfPrincipled"):
+                if "Dispersion" in node.inputs:
+                    node.inputs["Dispersion"].default_value = dispersion
+                    touched.append(node.name)
+        if not touched:
+            return {"ok": False, "error": "No Glass/Principled BSDF with Dispersion input found. Requires Blender 4.2+."}
+        return {"ok": True, "material": mat.name, "nodes": touched, "dispersion": dispersion}
+
+    if tool == "create_prism_array":
+        count = int(cmd.get("count", 6))
+        radius = float(cmd.get("radius", 2.0))
+        prism_length = float(cmd.get("prism_length", 3.0))
+        prism_radius = float(cmd.get("prism_radius", 0.6))
+        tilt = float(cmd.get("tilt", 0.0))  # degrees, rotate each prism around its local axis
+        center_gap = float(cmd.get("center_gap", 0.3))
+        name_prefix = cmd.get("name_prefix") or "Prism"
+        axis = (cmd.get("axis") or "Z").upper()  # layout plane normal
+
+        created = []
+        for i in range(count):
+            theta = (2.0 * math.pi * i) / count
+            # Prism laid along local X axis, pointing outward from center
+            dx = math.cos(theta) * (radius + center_gap)
+            dy = math.sin(theta) * (radius + center_gap)
+
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=3,
+                radius=prism_radius,
+                depth=prism_length,
+                location=(dx, dy, 0),
+            )
+            obj = bpy.context.active_object
+            obj.name = f"{name_prefix}_{i+1:02d}"
+            # Rotate so the cylinder's depth axis points radially outward (from Z to radial direction)
+            # Cylinder default depth is along local Z. Rotate 90° around Y, then spin around Z by theta.
+            obj.rotation_euler = (0, math.radians(90), theta + math.radians(tilt))
+            created.append(obj.name)
+
+        return {"ok": True, "objects": created, "count": len(created)}
 
     return {"ok": False, "error": f"Unknown tool: {tool!r}"}
 

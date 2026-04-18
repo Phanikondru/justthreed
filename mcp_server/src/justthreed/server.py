@@ -104,6 +104,100 @@ def create_primitive(
 
 
 @mcp.tool()
+def create_capsule(
+    name: str | None = None,
+    length: float = 2.0,
+    height: float = 1.0,
+    depth: float = 1.0,
+    segments: int = 32,
+    location: list[float] | None = None,
+    rotation: list[float] | None = None,
+) -> dict:
+    """Create a capsule/pill/stadium-prism mesh: a rectangle capped by two
+    hemispheres along its long axis, extruded to `depth`. Perfect for dynamic
+    islands, AirPod cases, pill-shaped buttons, remote controls, and anything
+    that needs a true stadium outline (which a cube+bevel only approximates).
+
+    - `length` is the longer dimension (X), `height` is the shorter (Y), and
+      `length` must be >= `height`. `depth` is the Z extrusion.
+    - `segments` is the vertex count per hemisphere (higher = smoother)."""
+    return _send({
+        "tool": "create_capsule",
+        "name": name,
+        "length": length,
+        "height": height,
+        "depth": depth,
+        "segments": segments,
+        "location": location or [0.0, 0.0, 0.0],
+        "rotation": rotation or [0.0, 0.0, 0.0],
+    })
+
+
+@mcp.tool()
+def create_rounded_rect(
+    name: str | None = None,
+    width: float = 2.0,
+    height: float = 1.0,
+    depth: float = 0.2,
+    corner_radius: float = 0.1,
+    corner_segments: int = 16,
+    location: list[float] | None = None,
+    rotation: list[float] | None = None,
+) -> dict:
+    """Create a rounded-rectangle prism: a rectangle with rounded corners
+    extruded to `depth`. The go-to primitive for phone bodies, tablet/laptop
+    shells, card mockups, nav bars, key caps, and any cushion-shaped form
+    factor. `corner_radius` must satisfy 0 < r <= min(width, height)/2.
+    `corner_segments` controls corner smoothness (16 is plenty for most uses)."""
+    return _send({
+        "tool": "create_rounded_rect",
+        "name": name,
+        "width": width,
+        "height": height,
+        "depth": depth,
+        "corner_radius": corner_radius,
+        "corner_segments": corner_segments,
+        "location": location or [0.0, 0.0, 0.0],
+        "rotation": rotation or [0.0, 0.0, 0.0],
+    })
+
+
+@mcp.tool()
+def create_empty(
+    name: str | None = None,
+    display_type: str = "PLAIN_AXES",
+    size: float = 1.0,
+    location: list[float] | None = None,
+    rotation: list[float] | None = None,
+) -> dict:
+    """Create an Empty object — an invisible transform node used as a rig
+    anchor or group parent. `display_type` is one of PLAIN_AXES, ARROWS,
+    SINGLE_ARROW, CUBE, SPHERE, CONE, IMAGE, CIRCLE. Pair with `parent_to`
+    to rotate or reposition a group of meshes as a unit."""
+    return _send({
+        "tool": "create_empty",
+        "name": name,
+        "display_type": display_type,
+        "size": size,
+        "location": location or [0.0, 0.0, 0.0],
+        "rotation": rotation or [0.0, 0.0, 0.0],
+    })
+
+
+@mcp.tool()
+def set_light_camera_visibility(name: str, visible: bool = True) -> dict:
+    """Toggle whether a light's emissive panel is directly visible to the
+    camera. Set `visible=False` to hide a large area light from the frame
+    while keeping its full lighting contribution — the fix for "there's a
+    bright rectangle floating next to my product shot"."""
+    return _send({
+        "tool": "set_light_camera_visibility",
+        "name": name,
+        "visible": visible,
+    })
+
+
+@mcp.tool()
 def delete_object(name: str) -> str:
     """Delete an object by name. Returns a confirmation message."""
     return _send({"tool": "delete_object", "name": name}).get("message", "deleted")
@@ -236,11 +330,37 @@ def reorder_modifier(name: str, modifier_name: str, index: int) -> dict:
     })
 
 
+_RENDER_CONSENT_PHRASE = "user explicitly asked to render"
+
+
+def _check_render_consent(user_request_quote: str) -> None:
+    """Gate render calls behind a verbatim confirmation string.
+
+    The model must pass the exact phrase `_RENDER_CONSENT_PHRASE` as
+    `user_request_quote`, AND include a short verbatim quote from the
+    user's most recent message showing the render was asked for.
+    This prevents auto-rendering as a silent "final step"."""
+    if not user_request_quote or _RENDER_CONSENT_PHRASE not in user_request_quote.lower():
+        raise ValueError(
+            "Render blocked: this tool only runs when the user explicitly asks for a render. "
+            f"Pass `user_request_quote` containing the phrase '{_RENDER_CONSENT_PHRASE}' "
+            "followed by a short verbatim quote from the user's latest message that asked "
+            "for the render (e.g. \"render it\", \"show me\", \"preview\"). "
+            "Do NOT call this as a final step after finishing modeling/materials/lighting work."
+        )
+
+
 @mcp.tool()
-def render_image(output_path: str, timeout_seconds: int = 1800) -> dict:
+def render_image(output_path: str, user_request_quote: str, timeout_seconds: int = 1800) -> dict:
     """Render the current scene through the active camera to a file on disk.
     `output_path` should end in .png or .jpg. Uses the scene's current resolution
     and render engine.
+
+    `user_request_quote` is REQUIRED — it must contain the literal phrase
+    "user explicitly asked to render" followed by a short verbatim quote of
+    the user's request (e.g. "user explicitly asked to render — they said
+    'render it now'"). If the user did not ask for a render, do not call
+    this tool.
 
     `timeout_seconds` controls how long to wait for the render to finish
     (default 1800 = 30 minutes). Complex scenes with high sample counts can
@@ -250,15 +370,21 @@ def render_image(output_path: str, timeout_seconds: int = 1800) -> dict:
     IMPORTANT — do NOT call this automatically as a "final step" after finishing
     a modeling, materials, lighting, or scene-setup task. Only call it when the
     user explicitly asks to render or export an image."""
+    _check_render_consent(user_request_quote)
     return _send({"tool": "render_image", "output_path": output_path}, timeout=float(timeout_seconds))
 
 
 @mcp.tool()
-def render_and_show(resolution: int = 512, timeout_seconds: int = 600) -> Image:
+def render_and_show(user_request_quote: str, resolution: int = 512, timeout_seconds: int = 600) -> Image:
     """Render the current scene at a low preview resolution and return the PNG
     so you can actually see the result. Use this for vision-in-the-loop iteration:
     make a change, render, look at it, decide what to fix, repeat. `resolution` is
     the longest edge in pixels (default 512) — keep it small for fast feedback.
+
+    `user_request_quote` is REQUIRED — it must contain the literal phrase
+    "user explicitly asked to render" followed by a short verbatim quote of
+    the user's request. If the user did not ask for a render, do not call
+    this tool.
 
     `timeout_seconds` controls how long to wait (default 600 = 10 minutes).
     Preview renders are usually fast, but complex scenes with subsurface
@@ -269,7 +395,58 @@ def render_and_show(resolution: int = 512, timeout_seconds: int = 600) -> Image:
     user explicitly asks to render, preview, or see the result. Rendering is
     expensive and the user wants to control when it happens. Treat task
     completion as the last step unless a render was requested."""
+    _check_render_consent(user_request_quote)
     response = _send({"tool": "render_and_show", "resolution": resolution}, timeout=float(timeout_seconds))
+    data = base64.b64decode(response["data_base64"])
+    return Image(data=data, format="png")
+
+
+_CRITIQUE_CONSENT_PHRASE = "user asked to match a reference image"
+
+
+@mcp.tool()
+def critique_render(
+    user_request_quote: str,
+    resolution: int = 512,
+    samples: int = 16,
+    timeout_seconds: int = 120,
+) -> Image:
+    """Fast preview render for image-match critique loops.
+
+    Use this when the user provided a reference image and wants the scene to
+    match it. Switches temporarily to EEVEE with low samples and a small
+    resolution so the render takes a few seconds instead of minutes. Restores
+    the original engine, samples, resolution, and output settings afterward.
+
+    Workflow:
+      1. Build the scene with primitives/modifiers.
+      2. Call `critique_render` to get a quick look from the active camera.
+      3. Visually compare the returned image against the user's reference
+         (proportions, silhouette, materials, lighting direction).
+      4. Apply targeted fixes (move, scale, bevel, swap material) and loop.
+      5. Stop when the match is close enough or the user is satisfied.
+
+    Keep iterations bounded — aim for 3-5 critique cycles, not 30. For the
+    final beauty render use `render_image` / `render_and_show` with the
+    scene's real engine and samples.
+
+    `user_request_quote` is REQUIRED — must contain the literal phrase
+    "user asked to match a reference image" followed by a short verbatim
+    quote from the user's request (e.g. "user asked to match a reference
+    image — they said 'make it look like this bottle photo'").
+    """
+    quote = (user_request_quote or "").lower()
+    if _CRITIQUE_CONSENT_PHRASE not in quote and _RENDER_CONSENT_PHRASE not in quote:
+        raise ValueError(
+            "critique_render blocked: this tool runs only during an explicit "
+            f"image-match workflow. Pass `user_request_quote` containing "
+            f"'{_CRITIQUE_CONSENT_PHRASE}' followed by a short verbatim quote "
+            "from the user's message showing they asked to match a reference image."
+        )
+    response = _send(
+        {"tool": "critique_render", "resolution": resolution, "samples": samples},
+        timeout=float(timeout_seconds),
+    )
     data = base64.b64decode(response["data_base64"])
     return Image(data=data, format="png")
 
@@ -350,6 +527,84 @@ def create_glass_material(
         "ior": ior,
         "roughness": roughness,
         "transmission": transmission,
+    })
+
+
+@mcp.tool()
+def create_dispersion_glass_material(
+    name: str,
+    base_ior: float = 1.45,
+    dispersion: float = 0.05,
+    roughness: float = 0.0,
+    fresnel_ior: float = 1.45,
+    glossy_roughness: float = 0.1,
+    glossy_mix: float = 0.5,
+    glass_color: list[float] | None = None,
+    glossy_color: list[float] | None = None,
+) -> dict:
+    """Build a chromatic-dispersion glass material (rainbow/prism refraction) by
+    wiring three Glass BSDFs (R/G/B) at offset IORs, summed and Fresnel-mixed
+    with a Glossy BSDF. Produces the classic prism dispersion look (e.g. Whitney
+    Spark album cover). `base_ior` is the middle (green) IOR; `dispersion` is
+    the IOR delta for red (base-d) and blue (base+d). Higher dispersion = more
+    pronounced rainbow. `glossy_mix` controls the Mix Shader factor (0=pure
+    glass, 1=pure glossy). Cycles engine strongly recommended. Requires render
+    samples ≥256 and Cycles light-path Transmission/Glossy bounces ≥8 to
+    resolve the rainbow without noise."""
+    return _send({
+        "tool": "create_dispersion_glass_material",
+        "name": name,
+        "base_ior": base_ior,
+        "dispersion": dispersion,
+        "roughness": roughness,
+        "fresnel_ior": fresnel_ior,
+        "glossy_roughness": glossy_roughness,
+        "glossy_mix": glossy_mix,
+        "glass_color": glass_color,
+        "glossy_color": glossy_color,
+    })
+
+
+@mcp.tool()
+def enable_cycles_dispersion(material_name: str, dispersion: float = 0.25) -> dict:
+    """Enable Blender 4.2+ built-in dispersion on any Glass/Principled BSDF
+    nodes inside an existing material. Simpler alternative to the 3-BSDF manual
+    graph — one value, no wiring. `dispersion` is 0..1 (0.25 is a strong,
+    visible rainbow). Only works on Blender 4.2 or newer with Cycles."""
+    return _send({
+        "tool": "enable_cycles_dispersion",
+        "material_name": material_name,
+        "dispersion": dispersion,
+    })
+
+
+@mcp.tool()
+def create_prism_array(
+    count: int = 6,
+    radius: float = 2.0,
+    prism_length: float = 3.0,
+    prism_radius: float = 0.6,
+    tilt: float = 0.0,
+    center_gap: float = 0.3,
+    name_prefix: str = "Prism",
+) -> dict:
+    """Create N triangular prisms arranged radially in the XY plane, each
+    pointing outward from the center — the layout used in the Whitney Spark
+    album cover. `count` prisms evenly spaced around a circle of `radius`.
+    Each prism is a 3-sided cylinder of `prism_length` (along its axis) and
+    `prism_radius` (cross-section). `tilt` rotates each prism around its radial
+    axis in degrees (try 15–30 for a fan effect). `center_gap` pushes prisms
+    outward so they don't intersect at the origin. Returns the created object
+    names — apply a dispersion glass material to all of them afterward."""
+    return _send({
+        "tool": "create_prism_array",
+        "count": count,
+        "radius": radius,
+        "prism_length": prism_length,
+        "prism_radius": prism_radius,
+        "tilt": tilt,
+        "center_gap": center_gap,
+        "name_prefix": name_prefix,
     })
 
 
@@ -783,8 +1038,10 @@ def bevel_edges(
     segments: int = 1,
     profile: float = 0.5,
 ) -> dict:
-    """Bevel a set of edges. `width` is the offset distance, `segments` is the
-    subdivision count (more = rounder), `profile` is 0–1 (0.5 = circular)."""
+    """Bevel a set of edges (destructive). `width` is offset, `segments` subdivisions, `profile` 0-1.
+    Do NOT chain on already-beveled geometry — use `add_bevel_modifier` with limit='ANGLE' instead.
+    Safe width <= min adjacent face width / 2; higher widths need `clamp_overlap=False` on a modifier.
+    For hard-surface, prefer non-destructive `add_bevel_modifier` + `add_weighted_normals_modifier`."""
     return _send({
         "tool": "bevel_edges",
         "name": name,
@@ -1942,6 +2199,775 @@ def analyze_reference_image(image_path: str) -> dict:
 
     return analyze_image(image_path)
 
+
+
+# ---------- Hard-surface iPhone-style modeling helpers ----------
+
+
+@mcp.tool()
+def create_rounded_box(
+    name: str,
+    width: float,
+    height: float,
+    depth: float,
+    corner_radius: float,
+    edge_bevel: float = 0.0,
+    segments: int = 16,
+    location: list[float] | None = None,
+) -> dict:
+    """Create a hard-surface rounded box (front-face XZ rounded-rect extruded along Y).
+    Optional `edge_bevel` adds a small chamfer on front/back perimeter edges for the iPhone rail look."""
+    return _send({
+        "tool": "create_rounded_box",
+        "name": name,
+        "width": width,
+        "height": height,
+        "depth": depth,
+        "corner_radius": corner_radius,
+        "edge_bevel": edge_bevel,
+        "segments": segments,
+        "location": list(location) if location else [0.0, 0.0, 0.0],
+    })
+
+
+@mcp.tool()
+def create_phone_body(
+    name: str = "PhoneBody",
+    width: float = 7.7,
+    height: float = 16.0,
+    depth: float = 0.83,
+    corner_radius: float = 1.35,
+    rail_bevel: float = 0.18,
+    location: list[float] | None = None,
+) -> dict:
+    """Create an iPhone-proportioned rounded box with sensible defaults and an auto rail bevel.
+    Wrapper around `create_rounded_box` for discoverability."""
+    return _send({
+        "tool": "create_phone_body",
+        "name": name,
+        "width": width,
+        "height": height,
+        "depth": depth,
+        "corner_radius": corner_radius,
+        "rail_bevel": rail_bevel,
+        "location": list(location) if location else [0.0, 0.0, 0.0],
+    })
+
+
+@mcp.tool()
+def fillet_seam(
+    obj_a: str,
+    obj_b: str,
+    plane_value: float,
+    radius: float,
+    plane_axis: str = "Y",
+    overlap: float = 0.1,
+    segments: int = 10,
+    profile: float = 0.5,
+    consume_b: bool = True,
+) -> dict:
+    """Union `obj_b` into `obj_a` and fillet the resulting seam ring (camera plateau onto phone body).
+    Auto-clamps radius and detects seam edges via interface-plane face filtering (not angle-based)."""
+    return _send({
+        "tool": "fillet_seam",
+        "obj_a": obj_a,
+        "obj_b": obj_b,
+        "plane_axis": plane_axis,
+        "plane_value": plane_value,
+        "radius": radius,
+        "overlap": overlap,
+        "segments": segments,
+        "profile": profile,
+        "consume_b": consume_b,
+    })
+
+
+@mcp.tool()
+def load_reference_image(
+    path: str,
+    axis: str = "-Y",
+    opacity: float = 0.5,
+    empty_name: str = "RefImage",
+) -> dict:
+    """Load an image as an Empty (IMAGE) oriented to face a viewport axis (+X/-X/+Y/-Y/+Z/-Z).
+    Use as a background reference plane while modeling."""
+    return _send({
+        "tool": "load_reference_image",
+        "path": path,
+        "axis": axis,
+        "opacity": opacity,
+        "empty_name": empty_name,
+    })
+
+
+# ---------- Hard-surface batch 2 — booleans, modifiers, edge ops, queries ----------
+
+
+@mcp.tool()
+def cylinder_cut(
+    target: str,
+    location: list[float],
+    axis: str,
+    radius: float,
+    depth: float,
+    vertices: int = 48,
+    consume_cutter: bool = True,
+) -> dict:
+    """Boolean-difference a cylinder out of `target` (cylinder centered at `location`, oriented along `axis`).
+    Cylinder spans +-depth/2 along the axis; `consume_cutter` removes the temp cutter when True."""
+    return _send({
+        "tool": "cylinder_cut",
+        "target": target,
+        "location": list(location),
+        "axis": axis,
+        "radius": radius,
+        "depth": depth,
+        "vertices": vertices,
+        "consume_cutter": consume_cutter,
+    })
+
+
+@mcp.tool()
+def add_mirror_modifier(
+    name: str,
+    axis: str = "X",
+    use_clip: bool = True,
+    merge_threshold: float = 0.001,
+    mirror_object: str | None = None,
+) -> dict:
+    """Add a Mirror modifier (axis can be combos like 'XY'); does not apply.
+    Optional `mirror_object` is the empty/object used as mirror pivot."""
+    return _send({
+        "tool": "add_mirror_modifier",
+        "name": name,
+        "axis": axis,
+        "use_clip": use_clip,
+        "merge_threshold": merge_threshold,
+        "mirror_object": mirror_object,
+    })
+
+
+@mcp.tool()
+def apply_mirror(name: str, modifier_name: str = "Mirror") -> dict:
+    """Apply the named Mirror modifier on `name`."""
+    return _send({"tool": "apply_mirror", "name": name, "modifier_name": modifier_name})
+
+
+@mcp.tool()
+def add_subsurf_modifier(
+    name: str,
+    levels: int = 2,
+    render_levels: int = 3,
+    use_limit_surface: bool = True,
+) -> dict:
+    """Add a Subdivision Surface modifier and shade smooth the object."""
+    return _send({
+        "tool": "add_subsurf_modifier",
+        "name": name,
+        "levels": levels,
+        "render_levels": render_levels,
+        "use_limit_surface": use_limit_surface,
+    })
+
+
+@mcp.tool()
+def set_edge_crease(
+    name: str,
+    edge_selection: str = "sharp",
+    value: float = 1.0,
+    sharp_angle: float = 30.0,
+) -> dict:
+    """Set the crease weight on edges chosen by `edge_selection` (sharp/boundary/all/selected)."""
+    return _send({
+        "tool": "set_edge_crease",
+        "name": name,
+        "edge_selection": edge_selection,
+        "value": value,
+        "sharp_angle": sharp_angle,
+    })
+
+
+@mcp.tool()
+def set_edge_bevel_weight(
+    name: str,
+    edge_selection: str = "sharp",
+    value: float = 1.0,
+    sharp_angle: float = 30.0,
+) -> dict:
+    """Set the bevel weight on edges chosen by `edge_selection` (sharp/boundary/all/selected)."""
+    return _send({
+        "tool": "set_edge_bevel_weight",
+        "name": name,
+        "edge_selection": edge_selection,
+        "value": value,
+        "sharp_angle": sharp_angle,
+    })
+
+
+@mcp.tool()
+def add_support_loops(
+    name: str,
+    edge_selection: str = "sharp",
+    distance: float = 0.05,
+    sharp_angle: float = 30.0,
+) -> dict:
+    """Add SubD-friendly support loops (2-segment profile=1 bevel) at `distance` around chosen edges."""
+    return _send({
+        "tool": "add_support_loops",
+        "name": name,
+        "edge_selection": edge_selection,
+        "distance": distance,
+        "sharp_angle": sharp_angle,
+    })
+
+
+@mcp.tool()
+def select_by(
+    name: str,
+    mode: str,
+    sharp_angle: float = 30.0,
+    normal: list[float] | None = None,
+    tolerance: float = 0.1,
+    axis: str | None = None,
+    value: float = 0.0,
+) -> dict:
+    """Select edges/faces on `name` by `mode` (boundary/non_manifold/sharp/by_normal/by_plane).
+    Selection is left active in object mode for follow-up ops."""
+    payload: dict = {
+        "tool": "select_by",
+        "name": name,
+        "mode": mode,
+        "sharp_angle": sharp_angle,
+        "tolerance": tolerance,
+        "value": value,
+    }
+    if normal is not None:
+        payload["normal"] = list(normal)
+    if axis is not None:
+        payload["axis"] = axis
+    return _send(payload)
+
+
+@mcp.tool()
+def surface_blend_loops(
+    obj_a: str,
+    obj_b: str,
+    loop_a_selector: dict,
+    loop_b_selector: dict,
+    segments: int = 8,
+    profile: float = 0.5,
+    consume_b: bool = True,
+) -> dict:
+    """Join `obj_b` into `obj_a` and bridge the two selected edge loops into a smooth blend.
+    Loop selectors reuse `select_by` modes (e.g. {'mode': 'by_plane', 'axis': 'Y', 'value': 0.5})."""
+    return _send({
+        "tool": "surface_blend_loops",
+        "obj_a": obj_a,
+        "obj_b": obj_b,
+        "loop_a_selector": dict(loop_a_selector),
+        "loop_b_selector": dict(loop_b_selector),
+        "segments": segments,
+        "profile": profile,
+        "consume_b": consume_b,
+    })
+
+
+@mcp.tool()
+def add_array_modifier(
+    name: str,
+    count: int = 3,
+    relative_offset: list[float] | None = None,
+    use_constant: bool = False,
+    constant_offset: list[float] | None = None,
+) -> dict:
+    """Add an Array modifier with a relative-offset displacement and optional constant-offset."""
+    return _send({
+        "tool": "add_array_modifier",
+        "name": name,
+        "count": count,
+        "relative_offset": list(relative_offset) if relative_offset else [1.0, 0.0, 0.0],
+        "use_constant": use_constant,
+        "constant_offset": list(constant_offset) if constant_offset else [0.0, 0.0, 0.0],
+    })
+
+
+@mcp.tool()
+def solidify(
+    name: str,
+    thickness: float,
+    offset: float = -1.0,
+    even_thickness: bool = True,
+    apply: bool = False,
+) -> dict:
+    """Add a Solidify modifier (offset -1 inward, 0 centered, +1 outward); optionally apply."""
+    return _send({
+        "tool": "solidify",
+        "name": name,
+        "thickness": thickness,
+        "offset": offset,
+        "even_thickness": even_thickness,
+        "apply": apply,
+    })
+
+
+@mcp.tool()
+def inset_and_extrude(
+    name: str,
+    inset: float,
+    extrude: float,
+    face_selection: str = "selected",
+    normal: list[float] | None = None,
+    tolerance: float = 0.1,
+) -> dict:
+    """Inset then extrude faces chosen by `face_selection` (selected/by_normal/top/bottom/front/back/left/right).
+    Positive `extrude` = outward along face normal, negative = inward (well/recess)."""
+    payload: dict = {
+        "tool": "inset_and_extrude",
+        "name": name,
+        "face_selection": face_selection,
+        "inset": inset,
+        "extrude": extrude,
+        "tolerance": tolerance,
+    }
+    if normal is not None:
+        payload["normal"] = list(normal)
+    return _send(payload)
+
+
+@mcp.tool()
+def dimensions_of(name: str) -> dict:
+    """Return world-space dimensions, bbox min/max, and origin location for `name`."""
+    return _send({"tool": "dimensions_of", "name": name})
+
+
+@mcp.tool()
+def distance_between(a: str, b: str) -> dict:
+    """Return world-space distance and delta vector between the origins of objects `a` and `b`."""
+    return _send({"tool": "distance_between", "a": a, "b": b})
+
+
+# ---------- Batch 3: Hard-surface atomic ops + composites (from Blender Bros e-book) ----------
+
+
+@mcp.tool()
+def add_bevel_modifier(
+    name: str,
+    width: float = 0.02,
+    segments: int = 3,
+    profile: float = 0.5,
+    limit_method: str = "ANGLE",
+    angle_degrees: float = 30.0,
+    clamp_overlap: bool = False,
+    harden_normals: bool = True,
+    loop_slide: bool = True,
+) -> dict:
+    """Add a non-destructive Bevel modifier — the hard-surface workhorse.
+    `limit_method` ANGLE (auto) / WEIGHT (manual via set_edge_bevel_weight) / NONE (every edge).
+    Pitfall: Blender clamps bevels at Boolean connection points; set clamp_overlap=False to bevel past them.
+    For multi-size bevels stack two: first angle=30 small, second angle=60 larger (avoids overlap)."""
+    return _send({
+        "tool": "add_bevel_modifier",
+        "name": name,
+        "width": width,
+        "segments": segments,
+        "profile": profile,
+        "limit_method": limit_method,
+        "angle_degrees": angle_degrees,
+        "clamp_overlap": clamp_overlap,
+        "harden_normals": harden_normals,
+        "loop_slide": loop_slide,
+    })
+
+
+@mcp.tool()
+def add_weighted_normals_modifier(
+    name: str,
+    weight: int = 50,
+    keep_sharp: bool = True,
+    face_influence: bool = False,
+) -> dict:
+    """Add a Weighted Normal modifier to straighten bevel normals — fixes shading warps on flat hard-surface.
+    Stack AFTER Bevel. Pitfall: ineffective on curved surfaces (cylinders); use horizontal support loops instead."""
+    return _send({
+        "tool": "add_weighted_normals_modifier",
+        "name": name,
+        "weight": weight,
+        "keep_sharp": keep_sharp,
+        "face_influence": face_influence,
+    })
+
+
+@mcp.tool()
+def add_boolean_modifier(
+    target: str,
+    cutter: str,
+    operation: str = "DIFFERENCE",
+    solver: str = "EXACT",
+    apply: bool = False,
+    hide_cutter: bool = True,
+) -> dict:
+    """Non-destructive Boolean modifier (DIFFERENCE/UNION/INTERSECT). EXACT solver is slower but cleaner.
+    Stack ABOVE Bevel so bevel only applies to original edges, not boolean cut (PDF: bevel first, bool second).
+    Keep non-destructive so you can move cutter freely; only apply when ready to clean vertices."""
+    return _send({
+        "tool": "add_boolean_modifier",
+        "target": target,
+        "cutter": cutter,
+        "operation": operation,
+        "solver": solver,
+        "apply": apply,
+        "hide_cutter": hide_cutter,
+    })
+
+
+@mcp.tool()
+def set_auto_smooth(name: str, angle_degrees: float = 30.0) -> dict:
+    """Enable shade-smooth with an auto-smooth angle cutoff (edges sharper than angle stay faceted).
+    30deg is the hard-surface default. Uses mesh.auto_smooth in Blender 4.0, smooth-by-angle modifier in 4.1+."""
+    return _send({"tool": "set_auto_smooth", "name": name, "angle_degrees": angle_degrees})
+
+
+@mcp.tool()
+def merge_by_distance(name: str, distance: float = 0.0001) -> dict:
+    """Weld vertices within `distance`. Essential for boolean cleanup — removes duplicate verts after applying.
+    Pitfall: too-large distance collapses intentional detail; start with 0.0001 and increase only if needed."""
+    return _send({"tool": "merge_by_distance", "name": name, "distance": distance})
+
+
+@mcp.tool()
+def limited_dissolve(name: str, angle_degrees: float = 5.0) -> dict:
+    """Dissolve coplanar edges/verts whose angle is under `angle_degrees` — cleans up stray edges after booleans.
+    Pitfall: angle too high destroys curvature; keep under 10deg for cylinders, under 5deg for subtle curves."""
+    return _send({"tool": "limited_dissolve", "name": name, "angle_degrees": angle_degrees})
+
+
+@mcp.tool()
+def loop_cut(name: str, edge_index: int, cuts: int = 1, factor: float = 0.0) -> dict:
+    """Insert `cuts` loop(s) perpendicular to the edge ring containing `edge_index`.
+    Use for 'dicing': add loops to a cutter BEFORE boolean to force denser geometry in cut area (PDF ch. Dicing Booleans).
+    Also use for support loops on SubD meshes to tighten edges (alternative: add_support_loops)."""
+    return _send({"tool": "loop_cut", "name": name, "edge_index": edge_index, "cuts": cuts, "factor": factor})
+
+
+@mcp.tool()
+def knife_project(target: str, cutter: str, cut_through: bool = True) -> dict:
+    """Project `cutter`'s silhouette onto `target` as mesh cuts (scriptable knife-project equivalent).
+    Limitation: no interactive knife tool via script; use boolean for volumetric cuts or this for surface cuts.
+    Pitfall: requires camera/view alignment — target normal should face cutter."""
+    return _send({"tool": "knife_project", "target": target, "cutter": cutter, "cut_through": cut_through})
+
+
+@mcp.tool()
+def symmetrize(name: str, direction: str = "POSITIVE_X", threshold: float = 0.0001) -> dict:
+    """Make `name` symmetric by mirroring one half onto the other in-place (destructive, single object).
+    `direction` e.g. POSITIVE_X -> NEGATIVE_X copies +X side to -X. Different from Mirror modifier (separate object)."""
+    return _send({"tool": "symmetrize", "name": name, "direction": direction, "threshold": threshold})
+
+
+@mcp.tool()
+def triangulate(name: str, apply: bool = False, min_vertices: int = 4) -> dict:
+    """Add a Triangulate modifier (converts ngons/quads to tris). Needed for export to game engines / 3D printing.
+    Pitfall: applying destroys quad topology — keep non-destructive for hard-surface, only apply for export."""
+    return _send({"tool": "triangulate", "name": name, "apply": apply, "min_vertices": min_vertices})
+
+
+@mcp.tool()
+def add_decimate_modifier(
+    name: str,
+    mode: str = "COLLAPSE",
+    ratio: float = 0.5,
+    angle_degrees: float = 5.0,
+) -> dict:
+    """Non-destructive Decimate modifier. `mode` COLLAPSE (ratio), UNSUBDIV (iterations), DISSOLVE (planar).
+    Use PLANAR+angle=5 to clean dense boolean output without destroying silhouette."""
+    return _send({
+        "tool": "add_decimate_modifier",
+        "name": name,
+        "mode": mode,
+        "ratio": ratio,
+        "angle_degrees": angle_degrees,
+    })
+
+
+@mcp.tool()
+def remesh_modifier(
+    name: str,
+    mode: str = "VOXEL",
+    voxel_size: float = 0.02,
+    octree_depth: int = 6,
+    apply: bool = False,
+) -> dict:
+    """Add a Remesh modifier. VOXEL rebuilds as uniform voxels; SHARP preserves edges; SMOOTH smooths.
+    For hard-surface, use VOXEL only as last-resort cleanup; destroys hard edges. Better: manual cleanup + weighted normals."""
+    return _send({
+        "tool": "remesh_modifier",
+        "name": name,
+        "mode": mode,
+        "voxel_size": voxel_size,
+        "octree_depth": octree_depth,
+        "apply": apply,
+    })
+
+
+@mcp.tool()
+def make_planar(name: str) -> dict:
+    """Flatten selected faces onto their average plane (mesh.face_make_planar). Use after knife/boolean to clean tilted faces."""
+    return _send({"tool": "make_planar", "name": name})
+
+
+# ---------- Workflow composites ----------
+
+
+@mcp.tool()
+def hard_edge_weighted_normals(
+    name: str,
+    bevel_width: float = 0.005,
+    bevel_segments: int = 1,
+    angle_degrees: float = 30.0,
+) -> dict:
+    """One-shot 'hard-edge' setup: single-segment small bevel (angle-limited) + weighted normals modifier.
+    PDF's canonical flat-surface shading fix. Use on flat-dominant objects; for curved use add_support_loops instead."""
+    return _send({
+        "tool": "hard_edge_weighted_normals",
+        "name": name,
+        "bevel_width": bevel_width,
+        "bevel_segments": bevel_segments,
+        "angle_degrees": angle_degrees,
+    })
+
+
+@mcp.tool()
+def boolean_with_cleanup(
+    target: str,
+    cutter: str,
+    operation: str = "DIFFERENCE",
+    support_loop_distance: float = 0.01,
+    add_weighted_normals: bool = True,
+    consume_cutter: bool = True,
+) -> dict:
+    """Apply a boolean then auto-clean: merge_by_distance, limited_dissolve, support loops on sharp edges, weighted normals.
+    PDF's 'Boolean Cleanup Strategies' distilled. For curved surfaces this may still leave artifacts — inspect and slide verts."""
+    return _send({
+        "tool": "boolean_with_cleanup",
+        "target": target,
+        "cutter": cutter,
+        "operation": operation,
+        "support_loop_distance": support_loop_distance,
+        "add_weighted_normals": add_weighted_normals,
+        "consume_cutter": consume_cutter,
+    })
+
+
+@mcp.tool()
+def panel_cut(
+    name: str,
+    face_selection: str = "top",
+    inset: float = 0.02,
+    depth: float = -0.005,
+    bevel_inner: float = 0.001,
+) -> dict:
+    """Create a recessed panel (phone back, hatch, vent plate). Inset selected face, extrude inward, bevel inner edges.
+    `depth` negative = recess, positive = raised panel. face_selection: top/bottom/front/back/left/right/selected."""
+    return _send({
+        "tool": "panel_cut",
+        "name": name,
+        "face_selection": face_selection,
+        "inset": inset,
+        "depth": depth,
+        "bevel_inner": bevel_inner,
+    })
+
+
+@mcp.tool()
+def dice_boolean(
+    target: str,
+    cutter: str,
+    loop_cuts: int = 8,
+    operation: str = "DIFFERENCE",
+    apply: bool = True,
+    consume_cutter: bool = True,
+) -> dict:
+    """PDF's 'Dicing Booleans' technique: add loop cuts THROUGH the cutter before boolean, forcing denser geometry
+    in the cut area of the target. Use for angled/curved cuts that produce bad shading. `loop_cuts` = count through cutter."""
+    return _send({
+        "tool": "dice_boolean",
+        "target": target,
+        "cutter": cutter,
+        "loop_cuts": loop_cuts,
+        "operation": operation,
+        "apply": apply,
+        "consume_cutter": consume_cutter,
+    })
+
+
+@mcp.tool()
+def screw_hole(
+    target: str,
+    location: list[float],
+    radius: float = 0.005,
+    depth: float = 0.01,
+    countersink_radius: float = 0.008,
+    countersink_depth: float = 0.002,
+    axis: str = "Z",
+) -> dict:
+    """Cut a screw-hole with countersink: two stacked cylinder-cuts (wide shallow + narrow deep)."""
+    return _send({
+        "tool": "screw_hole",
+        "target": target,
+        "location": list(location),
+        "radius": radius,
+        "depth": depth,
+        "countersink_radius": countersink_radius,
+        "countersink_depth": countersink_depth,
+        "axis": axis,
+    })
+
+
+# ---------- Cookbook: learn/context layer ----------
+
+
+_HARDSURFACE_COOKBOOK: dict = {
+    "bevel_everything": {
+        "technique": "Always bevel every edge",
+        "when_to_use": "Every hard-surface object before render. Microscopic in reality -> always add one.",
+        "inputs": {"width": "0.002-0.01 m", "segments": "1-3", "limit": "ANGLE 30deg"},
+        "tool_sequence": ["add_bevel_modifier(name, width=0.005, limit_method='ANGLE', angle_degrees=30)"],
+        "pitfall": "Do not apply if you might re-edit; keep in stack.",
+    },
+    "auto_smooth_30": {
+        "technique": "Auto-smooth at 30 degrees",
+        "when_to_use": "Any object with a mix of flat faces and rounded bevels — default shading setup.",
+        "inputs": {"angle": "30deg"},
+        "tool_sequence": ["set_auto_smooth(name, angle_degrees=30)"],
+        "pitfall": "Blender 4.0 uses mesh.use_auto_smooth; 4.1+ uses a smooth-by-angle modifier.",
+    },
+    "hard_edge_flat": {
+        "technique": "Hard edge with Weighted Normals (flat surfaces)",
+        "when_to_use": "Flat-dominant shapes (boxes, plates). Fixes bevel shading warps.",
+        "inputs": {"bevel_width": "0.005", "segments": "1", "weight": "50"},
+        "tool_sequence": ["hard_edge_weighted_normals(name, bevel_width=0.005, bevel_segments=1)"],
+        "pitfall": "Ineffective on curved/cylindrical surfaces — use support loops + denser geo there.",
+    },
+    "curved_boolean_cleanup": {
+        "technique": "Boolean on a curved surface with horizontal support loops",
+        "when_to_use": "Cutting holes into cylinders/curved panels. PDF ch. Booleans (curved surfaces).",
+        "inputs": {"cylinder_vertices": "64+", "horizontal_loops": "1 above + 1 below cut"},
+        "tool_sequence": [
+            "loop_cut(target, edge_on_vertical_side, cuts=2)   # horizontal loops bracketing the cut",
+            "add_boolean_modifier(target, cutter, apply=True)",
+            "merge_by_distance(target, 0.0001)",
+            "add_bevel_modifier(target, width=0.002, limit_method='WEIGHT')",
+        ],
+        "pitfall": "Weighted Normals barely helps curved surfaces; focus on dense geo and tight bevel instead.",
+    },
+    "dicing_boolean": {
+        "technique": "Dicing a Boolean cutter",
+        "when_to_use": "Angled / long cutters producing stretched shading on the target.",
+        "inputs": {"loop_cuts_through_cutter": "8-16"},
+        "tool_sequence": ["dice_boolean(target, cutter, loop_cuts=12, apply=True)"],
+        "pitfall": "Make cutter just large enough to cover cut area; oversized cutter wastes loops.",
+    },
+    "multi_level_bevels": {
+        "technique": "Two bevel modifiers for different-size bevels on same mesh",
+        "when_to_use": "Boolean cut edges want larger/smaller bevel than object's exterior edges.",
+        "inputs": {"first_bevel_angle": "30", "second_bevel_angle": "60 (higher)"},
+        "tool_sequence": [
+            "add_bevel_modifier(name, angle_degrees=30, width=0.005)",
+            "add_boolean_modifier(name, cutter)",
+            "add_bevel_modifier(name, angle_degrees=60, width=0.002)  # only catches bool-cut edges",
+        ],
+        "pitfall": "If both bevels have the same angle_degrees, they double-bevel and overlap. Second MUST be higher.",
+    },
+    "bevel_weight_only_bool": {
+        "technique": "Bevel weight for manual control on applied booleans",
+        "when_to_use": "After applying a boolean, you want the cut-edges beveled separately.",
+        "inputs": {"weight": "1.0 on selected loops"},
+        "tool_sequence": [
+            "add_boolean_modifier(target, cutter, apply=True)",
+            "select_by(target, mode='boundary')  # or by_normal, by_plane",
+            "set_edge_bevel_weight(target, edge_selection='selected', value=1.0)",
+            "add_bevel_modifier(target, limit_method='WEIGHT', width=0.003)",
+        ],
+        "pitfall": "Semi-destructive: applying the boolean breaks non-destructive edits.",
+    },
+    "subd_with_boolean": {
+        "technique": "SubD + Boolean in correct stack order",
+        "when_to_use": "Organic-ish hard surface (e.g. sci-fi panels). PDF ch. Subd with Booleans.",
+        "inputs": {"subsurf_levels": "2-3", "apply_subsurf_before_bool": "yes"},
+        "tool_sequence": [
+            "add_subsurf_modifier(name, levels=2)",
+            "apply_modifier(name, 'Subsurf')   # critical: apply BEFORE bool",
+            "add_boolean_modifier(name, cutter)",
+            "add_bevel_modifier(name, width=0.002)",
+        ],
+        "pitfall": "Boolean BEFORE subsurf = catastrophic mesh collapse. Always apply subsurf first.",
+    },
+    "support_loops_subd": {
+        "technique": "Support loops to sharpen SubD edges",
+        "when_to_use": "Need tight bevels on a SubD mesh without creases.",
+        "inputs": {"distance": "0.02-0.05 from target edge"},
+        "tool_sequence": ["add_support_loops(name, edge_selection='sharp', distance=0.02)"],
+        "pitfall": "Too-close loops cause pinching; too-far loops round off corners.",
+    },
+    "non_destructive_panel": {
+        "technique": "Recessed panel (phone back / hatch)",
+        "when_to_use": "Inset + recess on a face — phones, controllers, device hatches.",
+        "inputs": {"inset": "0.003", "depth": "-0.001"},
+        "tool_sequence": ["panel_cut(name, face_selection='top', inset=0.003, depth=-0.001, bevel_inner=0.0005)"],
+        "pitfall": "Depth too negative pokes through thin shells; check solidify thickness.",
+    },
+    "speaker_grille": {
+        "technique": "Speaker grille via array + mirror + boolean",
+        "when_to_use": "Grid of identical cut-outs (speakers, vents).",
+        "inputs": {"array_count": "8x8", "cut_radius": "0.001"},
+        "tool_sequence": [
+            "create_primitive('CYLINDER', radius=0.001, depth=0.01) as cutter",
+            "add_array_modifier(cutter, count=8, relative_offset=[1.2,0,0])",
+            "add_array_modifier(cutter, count=8, relative_offset=[0,1.2,0])",
+            "apply all, then add_boolean_modifier(target, cutter, apply=True)",
+        ],
+        "pitfall": "Apply arrays before boolean; EXACT solver required for many cutters at once.",
+    },
+    "boolean_artifact_fix": {
+        "technique": "Fix shading artifacts around a Boolean",
+        "when_to_use": "Dark blotches along a boolean-cut edge — geometry overlap.",
+        "inputs": {"merge_distance": "0.0001", "dissolve_angle": "5deg"},
+        "tool_sequence": [
+            "apply_modifier(target, 'Boolean')",
+            "merge_by_distance(target, 0.0001)",
+            "limited_dissolve(target, angle_degrees=5)",
+            "# manual: slide overlapping verts away from bevel",
+        ],
+        "pitfall": "Artifacts = overlaps 100% of the time. If they persist, you missed a vertex pair.",
+    },
+    "clamp_overlap_off": {
+        "technique": "Disable Clamp Overlap on Bevel to bevel past boolean connections",
+        "when_to_use": "Bevel stops growing near a boolean cut due to Blender's default clamp.",
+        "inputs": {"clamp_overlap": "False"},
+        "tool_sequence": ["add_bevel_modifier(name, clamp_overlap=False, width=0.01)"],
+        "pitfall": "Off by default can cause immediate overlaps on complex meshes; re-enable if shading breaks.",
+    },
+    "ngon_workflow": {
+        "technique": "Ngons + Booleans (non-destructive modeling)",
+        "when_to_use": "Concept renders, 3D prints, CAD-style workflows. NOT rigged/animated meshes.",
+        "inputs": {},
+        "tool_sequence": ["use booleans liberally; only apply when geometry is frozen"],
+        "pitfall": "Ngons are fine for hard-surface per Chipp Walters / PDF. Only convert to quads for deformation/subd.",
+    },
+}
+
+
+@mcp.tool()
+def get_hardsurface_cookbook(technique: str | None = None) -> dict:
+    """Return the built-in hard-surface modeling cookbook (Blender Bros e-book + common patterns).
+    Pass `technique` to get one entry (e.g. 'dicing_boolean'), or omit to get all. Each entry has
+    when_to_use / inputs / tool_sequence / pitfall to guide AI clients composing workflows."""
+    if technique is None:
+        return {"ok": True, "techniques": _HARDSURFACE_COOKBOOK, "count": len(_HARDSURFACE_COOKBOOK)}
+    entry = _HARDSURFACE_COOKBOOK.get(technique)
+    if entry is None:
+        return {"ok": False, "error": f"unknown technique {technique!r}. Available: {sorted(_HARDSURFACE_COOKBOOK)}"}
+    return {"ok": True, "technique": technique, **entry}
 
 
 def main() -> None:
