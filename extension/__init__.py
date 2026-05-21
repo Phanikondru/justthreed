@@ -4221,6 +4221,247 @@ def _dispatch(cmd: dict) -> dict:
             "apply_modifiers": apply_modifiers,
         }
 
+    if tool == "export_mockup_manifest":
+        from bpy_extras.object_utils import world_to_camera_view
+
+        path = cmd.get("path")
+        if not path:
+            return {"ok": False, "error": "'path' is required"}
+
+        scene = bpy.context.scene
+        camera_name = cmd.get("camera_name")
+        if camera_name:
+            cam_obj = bpy.data.objects.get(camera_name)
+            if cam_obj is None or cam_obj.type != "CAMERA":
+                return {"ok": False, "error": f"No camera named {camera_name!r}"}
+        else:
+            cam_obj = scene.camera
+            if cam_obj is None:
+                return {"ok": False, "error": "Scene has no active camera"}
+
+        render = scene.render
+        pct = render.resolution_percentage / 100.0
+        res_x = max(1, int(round(render.resolution_x * pct)))
+        res_y = max(1, int(round(render.resolution_y * pct)))
+
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+
+        def project_bounds(obj):
+            # Use evaluated mesh so modifiers (e.g. Bevel for rounded corners) count.
+            eval_obj = obj.evaluated_get(depsgraph)
+            corners_world = [obj.matrix_world @ Vector(c) for c in eval_obj.bound_box]
+            xs, ys = [], []
+            for v in corners_world:
+                ndc = world_to_camera_view(scene, cam_obj, v)
+                xs.append(ndc.x * res_x)
+                ys.append((1.0 - ndc.y) * res_y)  # flip — Blender NDC is bottom-up
+            left = max(0, int(round(min(xs))))
+            right = min(res_x, int(round(max(xs))))
+            top = max(0, int(round(min(ys))))
+            bottom = min(res_y, int(round(max(ys))))
+            return {
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "width": right - left,
+                "height": bottom - top,
+            }
+
+        def build_region(spec):
+            obj_name = spec.get("object")
+            obj, err = _resolve_object(obj_name)
+            if err:
+                return None, err
+            bounds = project_bounds(obj)
+            cr = spec.get("corner_radius")
+            if cr is None and "corner_radius_px" in obj:
+                cr = float(obj["corner_radius_px"])
+            region = {
+                "name": spec.get("name") or obj.name,
+                "bounds": bounds,
+                "corner_radius": cr,
+                "perspective": None,
+            }
+
+            so_name = spec.get("smart_object_name")
+            if so_name is None and "smart_object_name" in obj:
+                so_name = str(obj["smart_object_name"])
+            if so_name:
+                region["smart_object_name"] = so_name
+
+            ref_res = spec.get("reference_resolution")
+            if ref_res is None:
+                rw = obj.get("ref_resolution_w")
+                rh = obj.get("ref_resolution_h")
+                if rw and rh:
+                    ref_res = {"width": int(rw), "height": int(rh)}
+            if ref_res and "width" in ref_res and "height" in ref_res:
+                region["reference_resolution"] = {
+                    "width": int(ref_res["width"]),
+                    "height": int(ref_res["height"]),
+                }
+
+            cutouts = []
+            for c_spec in spec.get("cutouts") or []:
+                c_region, c_err = build_region(c_spec)
+                if c_err:
+                    return None, c_err
+                cutouts.append(c_region)
+            if cutouts:
+                region["cutouts"] = cutouts
+            return region, None
+
+        regions_spec = cmd.get("regions")
+        if not regions_spec:
+            # Auto-discover: any object with custom property `editable_region` truthy.
+            # Children with `editable_region_cutout` truthy become nested cutouts.
+            regions_spec = []
+            for obj in scene.objects:
+                if not obj.get("editable_region"):
+                    continue
+                cutouts_spec = []
+                for child in obj.children:
+                    if child.get("editable_region_cutout"):
+                        cutouts_spec.append({
+                            "name": child.get("region_name") or child.name,
+                            "object": child.name,
+                        })
+                regions_spec.append({
+                    "name": obj.get("region_name") or obj.name,
+                    "object": obj.name,
+                    "cutouts": cutouts_spec,
+                })
+
+        if not regions_spec:
+            return {
+                "ok": False,
+                "error": (
+                    "No editable regions found. Pass 'regions' explicitly, or set "
+                    "custom property 'editable_region' = True on the screen object "
+                    "(and 'editable_region_cutout' = True on cutout children like "
+                    "the dynamic island)."
+                ),
+            }
+
+        built_regions = []
+        for spec in regions_spec:
+            region, err = build_region(spec)
+            if err:
+                return err
+            built_regions.append(region)
+
+        _PASS_ROLE_DEFAULTS = {
+            "body":        {"blend": "normal",   "opacity": 100, "visible": True,  "bit_depth": 16, "colorspace": "sRGB"},
+            "shadow":      {"blend": "multiply", "opacity": 100, "visible": True,  "bit_depth": 8,  "colorspace": "sRGB"},
+            "reflections": {"blend": "screen",   "opacity": 40,  "visible": True,  "bit_depth": 8,  "colorspace": "sRGB"},
+            "highlight":   {"blend": "screen",   "opacity": 60,  "visible": True,  "bit_depth": 8,  "colorspace": "sRGB"},
+            "ao":          {"blend": "multiply", "opacity": 50,  "visible": True,  "bit_depth": 8,  "colorspace": "sRGB"},
+            "id_mask":     {"blend": "normal",   "opacity": 100, "visible": False, "bit_depth": 8,  "colorspace": "sRGB"},
+            "depth":       {"blend": "normal",   "opacity": 100, "visible": False, "bit_depth": 16, "colorspace": "Linear"},
+            "normal":      {"blend": "normal",   "opacity": 100, "visible": False, "bit_depth": 16, "colorspace": "Linear"},
+        }
+
+        def _normalize_pass(spec):
+            if not isinstance(spec, dict):
+                return None, "each pass entry must be an object"
+            role = spec.get("role")
+            if role not in _PASS_ROLE_DEFAULTS:
+                return None, (
+                    f"pass role {role!r} not recognized. Allowed: "
+                    + ", ".join(_PASS_ROLE_DEFAULTS.keys())
+                )
+            file_rel = spec.get("file")
+            if not file_rel:
+                return None, "pass 'file' is required"
+            defaults = _PASS_ROLE_DEFAULTS[role]
+            entry = {
+                "name": spec.get("name") or role.replace("_", " ").title(),
+                "file": file_rel,
+                "role": role,
+                "blend": spec.get("blend", defaults["blend"]),
+                "opacity": int(spec.get("opacity", defaults["opacity"])),
+                "visible": bool(spec.get("visible", defaults["visible"])),
+                "bit_depth": int(spec.get("bit_depth", defaults["bit_depth"])),
+                "colorspace": spec.get("colorspace", defaults["colorspace"]),
+            }
+            if spec.get("premultiplied_alpha"):
+                entry["premultiplied_alpha"] = bool(spec["premultiplied_alpha"])
+            return entry, None
+
+        built_passes = []
+        for p_spec in cmd.get("passes") or []:
+            p_entry, p_err = _normalize_pass(p_spec)
+            if p_err:
+                return {"ok": False, "error": f"passes: {p_err}"}
+            built_passes.append(p_entry)
+
+        auto_scene = {"camera": {}, "render": {}}
+        cam_data = cam_obj.data
+        auto_scene["camera"]["focal_length_mm"] = float(cam_data.lens)
+        try:
+            if cam_data.dof.use_dof:
+                auto_scene["camera"]["f_stop"] = float(cam_data.dof.aperture_fstop)
+        except AttributeError:
+            pass
+        auto_scene["render"]["engine"] = render.engine
+        if render.engine == "CYCLES":
+            try:
+                auto_scene["render"]["samples"] = int(scene.cycles.samples)
+            except AttributeError:
+                pass
+        elif render.engine in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
+            try:
+                auto_scene["render"]["samples"] = int(scene.eevee.taa_render_samples)
+            except AttributeError:
+                pass
+
+        caller_scene = cmd.get("scene") or {}
+        scene_block = {}
+        for k in ("camera", "render"):
+            merged = dict(auto_scene.get(k) or {})
+            merged.update(caller_scene.get(k) or {})
+            if merged:
+                scene_block[k] = merged
+        if caller_scene.get("lighting_rig"):
+            scene_block["lighting_rig"] = caller_scene["lighting_rig"]
+        for k, v in caller_scene.items():
+            if k in scene_block or k in ("camera", "render", "lighting_rig"):
+                continue
+            scene_block[k] = v
+
+        manifest = {
+            "version": 2,
+            "product": cmd.get("product") or "untitled",
+            "canvas": {
+                "width": res_x,
+                "height": res_y,
+                "resolution": int(cmd.get("dpi") or 72),
+                "fill": cmd.get("canvas_fill") or "transparent",
+            },
+            "passes": built_passes,
+            "editable_regions": built_regions,
+        }
+        if scene_block:
+            manifest["scene"] = scene_block
+
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+        with open(abs_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        return {
+            "ok": True,
+            "path": abs_path,
+            "version": 2,
+            "product": manifest["product"],
+            "canvas": manifest["canvas"],
+            "region_count": len(built_regions),
+            "regions": built_regions,
+            "pass_count": len(built_passes),
+            "passes": built_passes,
+        }
+
     # ---------- Phase 17 — Python escape hatch ----------
 
     if tool == "execute_python":

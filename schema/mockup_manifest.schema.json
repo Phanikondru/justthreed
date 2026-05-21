@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Phanikondru/justthreed/main/schema/mockup_manifest.schema.json",
+  "title": "mockup_manifest",
+  "description": "Contract between justthreed (Blender render producer) and justtwod (Photoshop PSD assembler). justthreed emits facts; justtwod decides how to realize them using Photoshop-native primitives (vector shapes, smart objects, real masks) so the designer's editable content stays resolution-independent.",
+  "type": "object",
+  "required": ["version", "product", "canvas", "passes", "editable_regions"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "Schema version. Breaking changes bump this integer.",
+      "const": 2
+    },
+    "product": {
+      "type": "string",
+      "description": "Short identifier for the product (e.g. 'iphone17_pro'). Used for PSD naming and grouping."
+    },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "width":      { "type": "integer", "minimum": 1, "description": "Canvas width in pixels. Must match every pass." },
+        "height":     { "type": "integer", "minimum": 1, "description": "Canvas height in pixels. Must match every pass." },
+        "resolution": { "type": "integer", "minimum": 1, "default": 72, "description": "DPI metadata for the PSD." },
+        "fill": {
+          "type": "string",
+          "enum": ["transparent"],
+          "default": "transparent",
+          "description": "Base fill of the new PSD. Transparent lets the designer add their own background layer."
+        }
+      }
+    },
+    "passes": {
+      "type": "array",
+      "description": "Rendered raster passes. Array order is the bottom-up layer stack: index 0 sits at the bottom of the PSD.",
+      "items": { "$ref": "#/$defs/pass" }
+    },
+    "editable_regions": {
+      "type": "array",
+      "description": "Interactive areas where a designer's content (smart object) drops in. justtwod renders each as a vector shape + clipped smart-object placeholder, never as a rasterized mask.",
+      "items": { "$ref": "#/$defs/region" }
+    },
+    "scene": {
+      "type": "object",
+      "description": "Optional scene metadata. Not required for PSD assembly; preserved for reproducibility and designer reference.",
+      "additionalProperties": true,
+      "properties": {
+        "camera": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "focal_length_mm": { "type": "number", "minimum": 0 },
+            "f_stop":          { "type": "number", "minimum": 0 }
+          }
+        },
+        "lighting_rig": {
+          "type": "string",
+          "description": "Identifier for the lighting setup used (e.g. 'three_point_soft', 'studio_hdri')."
+        },
+        "render": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "engine":  { "type": "string", "description": "e.g. 'CYCLES' or 'EEVEE_NEXT'." },
+            "samples": { "type": "integer", "minimum": 1 },
+            "hash":    { "type": "string", "description": "Opaque identifier so a rerender can be matched pixel-for-pixel." }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "bounds": {
+      "type": "object",
+      "description": "Axis-aligned pixel rectangle in canvas coordinates (top-left origin).",
+      "required": ["left", "top", "right", "bottom", "width", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "left":   { "type": "integer", "minimum": 0 },
+        "top":    { "type": "integer", "minimum": 0 },
+        "right":  { "type": "integer", "minimum": 0 },
+        "bottom": { "type": "integer", "minimum": 0 },
+        "width":  { "type": "integer", "minimum": 0 },
+        "height": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "pass": {
+      "type": "object",
+      "required": ["name", "file", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Layer name justtwod applies when importing this pass."
+        },
+        "file": {
+          "type": "string",
+          "description": "Filename relative to the manifest's own folder."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["body", "shadow", "reflections", "highlight", "ao", "id_mask", "depth", "normal"],
+          "description": "Semantic role. justtwod uses this to pick default blend mode, visibility, and grouping when the optional hints below are absent."
+        },
+        "blend": {
+          "type": "string",
+          "enum": ["normal", "multiply", "screen", "overlay", "soft_light", "hard_light", "linear_dodge", "color_burn"],
+          "default": "normal",
+          "description": "Blend mode hint for this pass."
+        },
+        "opacity": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 100,
+          "description": "Opacity hint (0–100)."
+        },
+        "visible": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the layer is visible by default in the assembled PSD. Utility passes (id_mask, depth, normal) are typically hidden."
+        },
+        "bit_depth": {
+          "type": "integer",
+          "enum": [8, 16, 32],
+          "default": 8,
+          "description": "Bit depth of the file. 16+ recommended for 'body' to avoid banding; 32 for EXR workflows."
+        },
+        "colorspace": {
+          "type": "string",
+          "enum": ["sRGB", "Linear"],
+          "default": "sRGB",
+          "description": "Color space the file is stored in."
+        },
+        "premultiplied_alpha": {
+          "type": "boolean",
+          "default": false,
+          "description": "True if the pass is stored with premultiplied alpha."
+        }
+      }
+    },
+    "region": {
+      "type": "object",
+      "description": "An editable region is realized in Photoshop as a vector shape layer (rounded rect when corner_radius is set) acting as a clipping mask for a smart-object placeholder.",
+      "required": ["name", "bounds"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Region identifier. Used for mask/group naming in the PSD."
+        },
+        "smart_object_name": {
+          "type": "string",
+          "default": "Your Design",
+          "description": "Name justtwod applies to the smart-object placeholder layer the designer will replace."
+        },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "corner_radius": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Pixel radius of the vector shape justtwod draws. null = sharp rectangle. Single scalar is only meaningful for face-on shots; off-axis shots should use 'perspective' (v3)."
+        },
+        "reference_resolution": {
+          "type": "object",
+          "description": "Native resolution of the design that drops in (e.g. 1179x2556 for an iPhone 15 Pro screen). Lets a designer's Figma export at native size scale into the region 1:1 without interpolation.",
+          "required": ["width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "width":  { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "perspective": {
+          "description": "4-point warp for off-axis surfaces. v2 requires null; v3 will define a 4-corner projection shape.",
+          "type": "null"
+        },
+        "cutouts": {
+          "type": "array",
+          "description": "Nested regions that justtwod subtracts from this region's vector mask (e.g. Dynamic Island inside a phone screen). Recursive: a cutout is itself a region.",
+          "items": { "$ref": "#/$defs/region" }
+        }
+      }
+    }
+  }
+}

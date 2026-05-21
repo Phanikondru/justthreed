@@ -976,6 +976,148 @@ def setup_product_studio(
     })
 
 
+_CAMERA_ANGLES = {
+    # unit direction (x, y, z) from the subject toward the camera, before scaling
+    "FRONT": (0.0, -1.0, 0.18),
+    "THREE_QUARTER": (0.7, -0.7, 0.45),
+    "TOP": (0.0, -0.05, 1.0),
+    "LOW": (0.6, -0.7, 0.15),
+}
+
+
+@mcp.tool()
+def stage_product_scene(
+    subject_name: str,
+    surface: str = "STUDIO_FLOOR",
+    subject_material: dict | None = None,
+    lighting: str = "SOFTBOX",
+    camera_angle: str = "THREE_QUARTER",
+    lens_mm: float = 85.0,
+    depth_of_field: bool = True,
+) -> dict:
+    """Stage a complete product-shot environment around an EXISTING object in
+    one call — the boring scaffolding (ground, material, lighting rig, framed
+    camera) collapsed into a single tool call so you don't burn a turn's
+    tool-call budget on plumbing.
+
+    Build the product shape first (create_primitive / create_capsule / the
+    specialized builders), then call this to set the stage around it. For
+    granular control, call the underlying tools (setup_product_studio,
+    add_camera, create_material) individually instead.
+
+    Arguments:
+    - `subject_name`: name of the object to stage around (must already exist).
+    - `surface`: STUDIO_FLOOR (a large neutral plane under the subject) or NONE.
+    - `subject_material`: optional dict to paint the subject, e.g.
+      {"base_color": [0.8, 0.1, 0.3], "roughness": 0.3, "metallic": 0.0}.
+      Omit to leave the subject's current material untouched.
+    - `lighting`: lighting preset passed to setup_product_studio (SOFTBOX,
+      HARD_LIGHT, HIGH_KEY, LOW_KEY).
+    - `camera_angle`: FRONT, THREE_QUARTER, TOP, or LOW.
+    - `lens_mm`: camera focal length (85 = flattering product macro).
+    - `depth_of_field`: when True, focuses on the subject at f/8.
+
+    Returns a summary of everything created (surface, material, lights, camera)
+    so you know the new scene state without a follow-up get_scene_info."""
+    angle = camera_angle.upper()
+    if angle not in _CAMERA_ANGLES:
+        raise ValueError(
+            f"camera_angle must be one of {sorted(_CAMERA_ANGLES)}, got {camera_angle!r}"
+        )
+
+    info = _send({"tool": "get_object", "name": subject_name}).get("object", {})
+    dims = info.get("dimensions") or [1.0, 1.0, 1.0]
+    loc = info.get("location") or [0.0, 0.0, 0.0]
+    span = max([abs(d) for d in dims] + [1e-3])
+    cx, cy, cz = loc[0], loc[1], loc[2]
+    floor_z = cz - dims[2] / 2.0
+    created: dict = {"subject": subject_name}
+
+    if surface.upper() == "STUDIO_FLOOR":
+        floor_extent = span * 6.0
+        _send({
+            "tool": "create_primitive",
+            "type": "PLANE",
+            "name": "StudioFloor",
+            "location": [cx, cy, floor_z],
+            "rotation": [0.0, 0.0, 0.0],
+            "scale": [floor_extent, floor_extent, 1.0],
+        })
+        _send({
+            "tool": "create_material",
+            "name": "StudioFloor_Mat",
+            "base_color": [0.18, 0.18, 0.18],
+            "roughness": 0.7,
+            "metallic": 0.0,
+        })
+        _send({
+            "tool": "assign_material",
+            "object_name": "StudioFloor",
+            "material_name": "StudioFloor_Mat",
+            "slot_index": 0,
+        })
+        created["surface"] = "StudioFloor"
+
+    if subject_material:
+        mat_name = f"{subject_name}_Mat"
+        _send({
+            "tool": "create_material",
+            "name": mat_name,
+            "base_color": subject_material.get("base_color"),
+            "roughness": float(subject_material.get("roughness", 0.5)),
+            "metallic": float(subject_material.get("metallic", 0.0)),
+        })
+        _send({
+            "tool": "assign_material",
+            "object_name": subject_name,
+            "material_name": mat_name,
+            "slot_index": 0,
+        })
+        created["material"] = mat_name
+
+    light_result = _send({
+        "tool": "setup_product_studio",
+        "subject_name": subject_name,
+        "style": lighting,
+        "distance": span * 4.0,
+    })
+    created["lighting"] = light_result.get("lights", lighting)
+
+    distance = span * 3.0
+    dx, dy, dz = _CAMERA_ANGLES[angle]
+    cam_loc = [cx + dx * distance, cy + dy * distance, cz + dz * distance]
+    cam = _send({
+        "tool": "add_camera",
+        "name": "ProductCam",
+        "location": cam_loc,
+        "target": subject_name,
+        "lens_mm": lens_mm,
+    })
+    cam_name = cam.get("name", "ProductCam")
+    _send({"tool": "set_active_camera", "name": cam_name})
+    if depth_of_field:
+        focus = sum((cam_loc[i] - loc[i]) ** 2 for i in range(3)) ** 0.5
+        _send({
+            "tool": "set_camera_properties",
+            "name": cam_name,
+            "lens_mm": lens_mm,
+            "dof_distance": focus,
+            "fstop": 8.0,
+        })
+    created["camera"] = cam_name
+
+    return {
+        "ok": True,
+        "message": (
+            f"Staged product scene around {subject_name!r}: "
+            f"{angle.lower().replace('_', '-')} camera, {lighting} lighting"
+            + (", studio floor" if "surface" in created else "")
+            + "."
+        ),
+        "created": created,
+    }
+
+
 # ---------- Phase 12 — edit-mode / hard-surface modeling ----------
 
 
@@ -1895,6 +2037,81 @@ def set_color_management(
     })
 
 
+_STUDIO_QUALITY_SAMPLES = {"DRAFT": 256, "HIGH": 1024, "ULTRA": 2048}
+
+
+@mcp.tool()
+def apply_studio_preset(
+    subject_name: str | None = None,
+    quality: str = "HIGH",
+    width: int = 3840,
+    height: int = 2160,
+    lighting_style: str = "SOFTBOX",
+    lighting_distance: float = 4.0,
+) -> dict:
+    """Apply a one-shot Apple-style product-render preset. Call this before
+    `render_image` / `render_and_show` to get publish-ready quality without
+    chaining a dozen tools.
+
+    Does in one call:
+      - Cycles engine on GPU with OpenImageDenoise
+      - Samples by tier: DRAFT=256, HIGH=1024 (default), ULTRA=2048
+      - `width` × `height` at 100% scale (default 4K, 3840×2160)
+      - Filmic view transform + High Contrast look
+      - If `subject_name` is given, builds a product-studio lighting rig
+        around it (`lighting_style`: SOFTBOX / HARD_LIGHT / HIGH_KEY /
+        LOW_KEY; `lighting_distance` scales the rig)
+
+    Returns a summary dict of what was applied. Does not touch the camera,
+    materials, world HDRI, or compositor — those stay under your control.
+    Geometry quality (bevels, subdivision) and lens choice still matter more
+    than any render setting; dial those first."""
+    tier = (quality or "HIGH").upper()
+    if tier not in _STUDIO_QUALITY_SAMPLES:
+        raise ValueError(
+            f"quality must be one of {sorted(_STUDIO_QUALITY_SAMPLES)}, got {quality!r}"
+        )
+    samples = _STUDIO_QUALITY_SAMPLES[tier]
+
+    _send({"tool": "set_render_engine", "engine": "CYCLES"})
+    _send({
+        "tool": "set_render_settings",
+        "width": width,
+        "height": height,
+        "samples": samples,
+        "denoise": True,
+        "device": "GPU",
+        "resolution_percentage": 100,
+    })
+    _send({
+        "tool": "set_color_management",
+        "view_transform": "Filmic",
+        "look": "High Contrast",
+        "exposure": None,
+        "gamma": None,
+    })
+
+    lighting = None
+    if subject_name:
+        lighting = _send({
+            "tool": "setup_product_studio",
+            "subject_name": subject_name,
+            "style": lighting_style,
+            "distance": lighting_distance,
+        })
+
+    return {
+        "preset": "studio",
+        "quality": tier,
+        "engine": "CYCLES",
+        "samples": samples,
+        "resolution": [width, height],
+        "view_transform": "Filmic",
+        "look": "High Contrast",
+        "lighting": lighting,
+    }
+
+
 @mcp.tool()
 def enable_compositor() -> dict:
     """Turn on the scene compositor. If the compositor tree is empty, a
@@ -1987,6 +2204,70 @@ def export_collection(
         "path": path,
         "apply_modifiers": apply_modifiers,
     }, timeout=180.0)
+
+
+@mcp.tool()
+def export_mockup_manifest(
+    path: str,
+    product: str | None = None,
+    camera_name: str | None = None,
+    regions: list | None = None,
+    passes: list | None = None,
+    dpi: int | None = None,
+    canvas_fill: str = "transparent",
+    scene: dict | None = None,
+) -> dict:
+    """Export a v2 `mockup_manifest.json` — the contract between justthreed
+    (Blender renders) and justtwod (PSD assembler). justthreed emits facts
+    only; justtwod realizes them with Photoshop-native primitives (vector
+    shapes, smart objects, real masks) so editable content stays
+    resolution-independent. Schema: `schema/mockup_manifest.schema.json`.
+
+    For each editable region object, projects its evaluated mesh's bounding
+    box through the active camera and writes the axis-aligned pixel rectangle
+    to the manifest. Supports nested cutouts (e.g. dynamic island inside
+    screen) so the consumer can subtract one shape from another.
+
+    Args:
+        path: Output JSON path. Parent dirs are created.
+        product: Short identifier (e.g. "iphone17_pro").
+        camera_name: Camera to project from. Defaults to scene camera.
+        regions: Explicit list. Each item:
+            `{"name": str, "object": str, "corner_radius": float|None,
+              "smart_object_name": str|None,
+              "reference_resolution": {"width": int, "height": int}|None,
+              "cutouts": [{"name": str, "object": str, ...}]}`.
+            If omitted, auto-discovers any object with custom property
+            `editable_region` truthy (children with `editable_region_cutout`
+            become cutouts). These custom properties are also consulted when
+            the matching spec field is absent:
+              `corner_radius_px`, `smart_object_name`,
+              `ref_resolution_w`, `ref_resolution_h`, `region_name`.
+        passes: Rendered raster passes, bottom-up stack order. Each item:
+            `{"file": str, "role": str, "name": str|None, "blend": str|None,
+              "opacity": int|None, "visible": bool|None, "bit_depth": int|None,
+              "colorspace": str|None, "premultiplied_alpha": bool|None}`.
+            `file` (relative to manifest folder) and `role` are required.
+            Allowed roles: body, shadow, reflections, highlight, ao, id_mask,
+            depth, normal. Missing fields are filled in by role-based defaults.
+            If omitted, an empty passes array is emitted (geometry-only
+            manifest; call again after rendering to add passes).
+        dpi: Canvas resolution metadata (default 72).
+        canvas_fill: "transparent" (default) — reserved for future values.
+        scene: Optional scene metadata (camera/lighting/render). Caller-
+            supplied values win; missing fields are auto-filled from the
+            active Blender scene where possible."""
+    return _send({
+        "tool": "export_mockup_manifest",
+        "path": path,
+        "product": product,
+        "camera_name": camera_name,
+        "regions": regions,
+        "passes": passes,
+        "dpi": dpi,
+        "canvas_fill": canvas_fill,
+        "scene": scene,
+    }, timeout=30.0)
 
 
 # ---------- Phase 17 — Python escape hatch ----------

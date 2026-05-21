@@ -1,0 +1,90 @@
+{
+  "$schema": "./mockup_manifest.schema.json",
+  "version": 2,
+  "product": "iphone17_pro",
+  "canvas": {
+    "width": 3840,
+    "height": 2160,
+    "resolution": 72,
+    "fill": "transparent"
+  },
+  "passes": [
+    {
+      "name": "Shadow",
+      "file": "phone_shadow_0001.png",
+      "role": "shadow",
+      "blend": "multiply",
+      "opacity": 100,
+      "visible": true,
+      "bit_depth": 8,
+      "colorspace": "sRGB"
+    },
+    {
+      "name": "Body",
+      "file": "phone_body_0001.tif",
+      "role": "body",
+      "blend": "normal",
+      "opacity": 100,
+      "visible": true,
+      "bit_depth": 16,
+      "colorspace": "sRGB"
+    },
+    {
+      "name": "Reflections",
+      "file": "phone_reflections_0001.png",
+      "role": "reflections",
+      "blend": "screen",
+      "opacity": 40,
+      "visible": true,
+      "bit_depth": 8,
+      "colorspace": "sRGB"
+    }
+  ],
+  "editable_regions": [
+    {
+      "name": "Screen",
+      "smart_object_name": "Your Design",
+      "bounds": {
+        "left": 1619,
+        "top": 433,
+        "right": 2221,
+        "bottom": 1727,
+        "width": 602,
+        "height": 1294
+      },
+      "corner_radius": 75,
+      "reference_resolution": {
+        "width": 1179,
+        "height": 2556
+      },
+      "perspective": null,
+      "cutouts": [
+        {
+          "name": "DynamicIsland",
+          "bounds": {
+            "left": 1798,
+            "top": 471,
+            "right": 2042,
+            "bottom": 555,
+            "width": 244,
+            "height": 84
+          },
+          "corner_radius": 42,
+          "perspective": null
+        }
+      ]
+    }
+  ],
+  "scene": {
+    "camera": {
+      "focal_length_mm": 85,
+      "f_stop": 5.6
+    },
+    "lighting_rig": "three_point_soft",
+    "render": {
+      "engine": "CYCLES",
+      "samples": 256,
+      "hash": "abc123"
+    }
+  }
+}
