@@ -8,12 +8,27 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import socket
+import sys
+import time
 
 from mcp.server.fastmcp import FastMCP, Image
 
 HOST = "localhost"
 PORT = 9876
+
+# Retry a transient connection-refused once — the extension's accept loop can
+# briefly be between connections, especially right after Blender starts.
+_CONNECT_RETRIES = 1
+_RETRY_DELAY_S = 0.25
+
+# Opt-in local telemetry. Set JUSTTHREED_TELEMETRY=1 to emit one JSON line per
+# tool call (name, duration, ok/error) to stderr. Local only — never networked,
+# and stdout stays clean for the MCP stdio protocol.
+_TELEMETRY = os.environ.get("JUSTTHREED_TELEMETRY", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 
 mcp = FastMCP("justthreed")
 
@@ -22,35 +37,69 @@ class BlenderError(RuntimeError):
     """Raised when the Blender extension returns an error or is unreachable."""
 
 
-def _send(command: dict, timeout: float = 15.0) -> dict:
-    payload = {**command, "_timeout": timeout}
-    sock_timeout = timeout + 5.0
-    try:
-        with socket.create_connection((HOST, PORT), timeout=sock_timeout) as s:
-            s.settimeout(sock_timeout)
-            s.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-            buf = b""
-            while b"\n" not in buf:
-                chunk = s.recv(65536)
-                if not chunk:
-                    break
-                buf += chunk
-    except ConnectionRefusedError as exc:
-        raise BlenderError(
-            f"Could not connect to Blender on {HOST}:{PORT}. "
-            "Make sure Blender is running, the JustThreed extension is enabled, "
-            "and you clicked 'Start MCP Server' in the N-panel."
-        ) from exc
-    except socket.timeout as exc:
-        raise BlenderError("Timed out waiting for Blender to respond.") from exc
+def _log_telemetry(tool: str, elapsed_ms: float, ok: bool, error: str | None = None) -> None:
+    if not _TELEMETRY:
+        return
+    record = {"tool": tool, "ms": round(elapsed_ms, 1), "ok": ok}
+    if error:
+        record["error"] = error
+    print(f"[justthreed.telemetry] {json.dumps(record)}", file=sys.stderr, flush=True)
 
+
+def _recv_response(s: socket.socket) -> dict:
+    """Read one newline-delimited JSON response. Raises BlenderError if the
+    connection closes before a complete line arrives, rather than silently
+    parsing a truncated buffer."""
+    buf = b""
+    while b"\n" not in buf:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    if b"\n" not in buf:
+        raise BlenderError(
+            f"Blender closed the connection before sending a complete response "
+            f"({len(buf)} bytes received). The extension may have crashed — "
+            "check Blender's system console."
+        )
     line, _, _ = buf.partition(b"\n")
     try:
-        response = json.loads(line.decode("utf-8"))
+        return json.loads(line.decode("utf-8"))
     except json.JSONDecodeError as exc:
         raise BlenderError(f"Invalid response from Blender: {line!r}") from exc
 
-    if not response.get("ok"):
+
+def _send(command: dict, timeout: float = 15.0) -> dict:
+    payload = {**command, "_timeout": timeout}
+    sock_timeout = timeout + 5.0
+    tool = command.get("tool", "?")
+    start = time.monotonic()
+
+    for attempt in range(_CONNECT_RETRIES + 1):
+        try:
+            with socket.create_connection((HOST, PORT), timeout=sock_timeout) as s:
+                s.settimeout(sock_timeout)
+                s.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+                response = _recv_response(s)
+            break
+        except ConnectionRefusedError as exc:
+            if attempt < _CONNECT_RETRIES:
+                time.sleep(_RETRY_DELAY_S)
+                continue
+            _log_telemetry(tool, (time.monotonic() - start) * 1000, ok=False, error="connection_refused")
+            raise BlenderError(
+                f"Could not connect to Blender on {HOST}:{PORT}. "
+                "Make sure Blender is running, the JustThreed extension is enabled, "
+                "and the MCP server is started (N-panel → Start MCP Server)."
+            ) from exc
+        except socket.timeout as exc:
+            _log_telemetry(tool, (time.monotonic() - start) * 1000, ok=False, error="timeout")
+            raise BlenderError("Timed out waiting for Blender to respond.") from exc
+
+    elapsed_ms = (time.monotonic() - start) * 1000
+    ok = bool(response.get("ok"))
+    _log_telemetry(tool, elapsed_ms, ok=ok, error=None if ok else response.get("error"))
+    if not ok:
         raise BlenderError(response.get("error", "Unknown error from Blender"))
     return response
 
