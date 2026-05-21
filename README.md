@@ -105,7 +105,7 @@ Render at 1920x1080 with depth of field focused on the hero
 Every AI client has a per-turn tool-call limit. A full render can need 15–40 tool calls. If the AI pauses mid-build:
 
 - **Just keep going**: reply with *"continue — call `get_scene_info` first"*.
-- **Stage your prompts**: shape → materials → lighting → render. End each stage with `render_and_show`.
+- **Stage your prompts**: shape → materials → lighting → render. Use `viewport_screenshot` for an instant look while iterating, and `render_and_show` only when you want a photoreal preview.
 - **Save and resume**: `save_blend_file` in one chat, `open_blend_file` in the next.
 
 Claude Code CLI and Gemini CLI (`/yolo` mode) chain the most tools per turn. Claude Desktop pauses sooner. Ollama works best with one stage per prompt.

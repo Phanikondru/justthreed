@@ -501,6 +501,47 @@ def critique_render(
 
 
 @mcp.tool()
+def viewport_screenshot(
+    resolution: int = 512,
+    shading: str = "MATERIAL",
+    camera_view: bool = True,
+) -> Image:
+    """Grab a fast OpenGL viewport snapshot of the scene and return the PNG.
+
+    This is the cheap, instant way to SEE the scene — it uses Blender's
+    realtime viewport rasterizer, not the path-traced render engine, so it
+    returns in well under a second regardless of scene complexity. The look is
+    approximate (good for checking shapes, placement, framing, and rough
+    materials) — not photoreal.
+
+    Unlike render_and_show / render_image / critique_render, this needs NO
+    consent phrase: it is not an expensive render, so use it freely for
+    vision-in-the-loop iteration — make a change, screenshot, look, fix,
+    repeat. Reach for render_and_show or render_image only when the user
+    actually wants a photoreal result.
+
+    Arguments:
+    - `resolution`: longest edge in pixels (default 512). Keep it small.
+    - `shading`: SOLID (fast clay look), MATERIAL (material preview, default),
+      or RENDERED (viewport engine shading — slower).
+    - `camera_view`: True (default) renders through the active scene camera;
+      False captures the current user viewport view instead.
+
+    Does not modify the scene's render engine or output settings."""
+    response = _send(
+        {
+            "tool": "viewport_screenshot",
+            "resolution": resolution,
+            "shading": shading.upper(),
+            "camera_view": camera_view,
+        },
+        timeout=60.0,
+    )
+    data = base64.b64decode(response["data_base64"])
+    return Image(data=data, format="png")
+
+
+@mcp.tool()
 def cancel_render() -> dict:
     """Cancel the currently running render in Blender. This sends an interrupt
     signal equivalent to pressing ESC in Blender. Use this when:

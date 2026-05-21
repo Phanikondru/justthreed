@@ -1667,6 +1667,81 @@ def _dispatch(cmd: dict) -> dict:
                 except OSError:
                     pass
 
+    if tool == "viewport_screenshot":
+        resolution = int(cmd.get("resolution") or 512)
+        shading = str(cmd.get("shading") or "MATERIAL").upper()
+        if shading not in {"SOLID", "MATERIAL", "RENDERED", "WIREFRAME"}:
+            return {"ok": False, "error": f"Unknown shading {shading!r} (use SOLID, MATERIAL, or RENDERED)"}
+        camera_view = bool(cmd.get("camera_view", True))
+
+        # OpenGL render needs a VIEW_3D context — find one to override into.
+        area = region = window = None
+        for win in bpy.context.window_manager.windows:
+            for ar in win.screen.areas:
+                if ar.type == 'VIEW_3D':
+                    rgn = next((r for r in ar.regions if r.type == 'WINDOW'), None)
+                    if rgn is not None:
+                        area, region, window = ar, rgn, win
+                        break
+            if area is not None:
+                break
+        if area is None:
+            return {"ok": False, "error": "No 3D viewport available for a screenshot — open a 3D Viewport editor and try again."}
+
+        scene = bpy.context.scene
+        # Camera framing needs a scene camera; fall back to the user view if absent.
+        use_camera = camera_view and scene.camera is not None
+        orig_x = scene.render.resolution_x
+        orig_y = scene.render.resolution_y
+        orig_pct = scene.render.resolution_percentage
+        orig_path = scene.render.filepath
+        orig_format = scene.render.image_settings.file_format
+        space = area.spaces.active
+        orig_shading = space.shading.type
+        tmp_path = None
+        try:
+            aspect = (orig_x / orig_y) if orig_y else 1.0
+            if aspect >= 1.0:
+                scene.render.resolution_x = resolution
+                scene.render.resolution_y = max(1, int(round(resolution / aspect)))
+            else:
+                scene.render.resolution_y = resolution
+                scene.render.resolution_x = max(1, int(round(resolution * aspect)))
+            scene.render.resolution_percentage = 100
+            scene.render.image_settings.file_format = "PNG"
+            space.shading.type = shading
+
+            fd, tmp_path = tempfile.mkstemp(prefix="justthreed_viewport_", suffix=".png")
+            os.close(fd)
+            scene.render.filepath = tmp_path
+
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.render.opengl(write_still=True, view_context=not use_camera)
+
+            with open(tmp_path, "rb") as f:
+                data = f.read()
+            return {
+                "ok": True,
+                "format": "png",
+                "width": scene.render.resolution_x,
+                "height": scene.render.resolution_y,
+                "camera_view": use_camera,
+                "shading": shading,
+                "data_base64": base64.b64encode(data).decode("ascii"),
+            }
+        finally:
+            scene.render.resolution_x = orig_x
+            scene.render.resolution_y = orig_y
+            scene.render.resolution_percentage = orig_pct
+            scene.render.filepath = orig_path
+            scene.render.image_settings.file_format = orig_format
+            space.shading.type = orig_shading
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
     # ---------- Phase 7 — Materials + shader node graph ----------
 
     if tool == "create_material":
