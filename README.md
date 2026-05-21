@@ -58,9 +58,9 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 ### 3. Start the MCP server inside Blender
 
-Press **N** in the 3D viewport → click the **JustThreed** tab → click **Start MCP Server**.
+By default the socket on `localhost:9876` **starts automatically when Blender launches** — no clicking required. To start or stop it manually, press **N** in the 3D viewport → click the **JustThreed** tab → **Start / Stop MCP Server**.
 
-> ⚠️ You need to do this **every time you open Blender**. The addon opens a socket on `localhost:9876` that your AI client talks to — if it's not running, tool calls will fail with "connection refused".
+> Prefer to start it by hand? Turn off **Auto-start MCP server when Blender launches** in **Edit → Preferences → Add-ons → JustThreed**. If the server isn't running, tool calls fail with "connection refused".
 
 To verify it's live:
 ```bash
@@ -113,7 +113,6 @@ Claude Code CLI and Gemini CLI (`/yolo` mode) chain the most tools per turn. Cla
 ## Limitations
 
 - Not yet on the Blender Extensions platform — install `addon.py` manually for now.
-- The MCP server must be started manually each Blender session (auto-start is on the roadmap).
 - `execute_code` runs arbitrary Python — save before using.
 - Local Ollama models need more hand-holding than Claude or Gemini for complex scenes.
 - Artistic judgment (composition, style) still needs a human in the loop.
@@ -130,7 +129,6 @@ Claude Code CLI and Gemini CLI (`/yolo` mode) chain the most tools per turn. Cla
 Contributions are welcome — new tools, asset library integrations, docs, bug fixes. Open an issue or PR. Roadmap ideas:
 
 - One-click install via the Blender Extensions platform
-- Auto-start the MCP server on Blender launch
 - Built-in model selector UI
 - Animation, rigging, and Sketchfab support
 - FBX / GLTF export pipeline for Unity and Unreal

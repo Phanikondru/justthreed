@@ -6195,9 +6195,61 @@ class JUSTTHREED_PT_panel(bpy.types.Panel):
         col.operator("justthreed.hello", icon='QUESTION')
 
 
+# ---------- Preferences ----------
+
+class JUSTTHREED_AddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    auto_start_server: bpy.props.BoolProperty(
+        name="Auto-start MCP server when Blender launches",
+        description=(
+            "Open the localhost:9876 socket automatically on startup so AI "
+            "clients can connect without clicking 'Start MCP Server' every "
+            "session. Disable if you prefer to start it manually from the "
+            "JustThreed N-panel"
+        ),
+        default=True,
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "auto_start_server")
+
+
+def _get_prefs():
+    """Return this extension's AddonPreferences, or None if unavailable."""
+    try:
+        return bpy.context.preferences.addons[__package__].preferences
+    except (KeyError, AttributeError):
+        return None
+
+
+def _deferred_autostart():
+    """One-shot timer fired shortly after register() so the socket opens once
+    Blender has finished initializing. Returns None so it does not repeat.
+
+    Starting the server directly inside register() is unsafe — the context is
+    restricted during startup — so we defer by a short interval instead."""
+    try:
+        prefs = _get_prefs()
+        if prefs is not None and prefs.auto_start_server and not _running:
+            _start_server()
+            print("[JustThreed] Auto-started MCP server (preference enabled)")
+            # Refresh the N-panel so it reflects the running state.
+            wm = bpy.context.window_manager
+            for window in getattr(wm, "windows", []):
+                for area in window.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
+    except Exception:
+        traceback.print_exc()
+    return None
+
+
 # ---------- Registration ----------
 
 classes = (
+    JUSTTHREED_AddonPreferences,
     JUSTTHREED_OT_hello,
     JUSTTHREED_OT_start_server,
     JUSTTHREED_OT_stop_server,
@@ -6224,9 +6276,18 @@ def register():
         bpy.utils.register_class(cls)
     if _on_load_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load_post)
+    # Defer the auto-start until Blender has finished initializing; the timer
+    # is one-shot (returns None) and reads the auto_start_server preference.
+    if not bpy.app.timers.is_registered(_deferred_autostart):
+        bpy.app.timers.register(_deferred_autostart, first_interval=0.5)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_deferred_autostart):
+        try:
+            bpy.app.timers.unregister(_deferred_autostart)
+        except ValueError:
+            pass
     _stop_server()
     if _on_load_post in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load_post)
